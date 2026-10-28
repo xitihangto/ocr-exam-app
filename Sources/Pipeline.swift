@@ -128,6 +128,8 @@ extension AppState {
         progressLines = []
         lastLogAt = nil          // 新一轮从零计时，别把上一轮的间隔带过来
         docx = .idle
+        // 测试期：开跑就把日志摊开，跑的过程中能一直看着（正式版改成 false）
+        if Self.autoOpenLogWhileTesting { openLog() }
 
         // 先把框里的文件拷到局部变量，再把上传框清空 —— 顺序反了就拿不到文件了。
         // 一个框里可能有很多张图（整份试卷），所以拷的是数组不是单个 URL。

@@ -1491,6 +1491,12 @@ final class AppState: ObservableObject {
     /// 一律只在这个面板里看 —— 所以 `progressLines` 是唯一的日志出口。
     @Published var showLog = false
 
+    /// **测试期开关**：每次开始识别时自动把运行日志展开，不用再点「详情」。
+    ///
+    /// 用户 2026-10-29 要求「测试阶段把日志放在显眼处」，正式发布前改回 `false`
+    /// 就恢复成「只有点详情才出现」。见 HANDOVER 待办里那一条。
+    static let autoOpenLogWhileTesting = true
+
     func openLog() {
         guard !showLog else { return }
         withAnimation(.easeOut(duration: 0.18)) { showLog = true }
