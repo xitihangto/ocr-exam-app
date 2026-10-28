@@ -1019,20 +1019,6 @@ struct UploadCard: View {
                     Spacer(minLength: 8)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                // 等待粘贴时的紫色提示（用户 2026-10-29 第 2 条）：
-                // 居中基准是**这一行文案区**，不是整张卡片 —— 所以挂在文案区自己身上做 overlay，
-                // 左侧那个 46pt 的加号不参与计算。只显示不挡点击。
-                .overlay(alignment: .center) {
-                    if armed {
-                        Text("按 ⌘V 或者右键粘贴，点框外取消")
-                            .font(.system(size: 10.5, weight: .medium))
-                            .foregroundStyle(Color.brandAccent)
-                            .lineLimit(1)
-                            .fixedSize()
-                            .allowsHitTesting(false)
-                            .transition(.opacity)
-                    }
-                }
                 // 第二行恒定是「支持哪些格式 + 数量上限」，激活粘贴时也不改写。
                 // 窄窗口下按 0.9 缩一点，宁可小一号也不要截断成「…图片最多…」。
                 Text(subtitle + limitText)
@@ -1043,6 +1029,21 @@ struct UploadCard: View {
                     .truncationMode(.tail)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        // 等待粘贴时的紫色提示（用户 2026-10-29 第 2 轮第 1 条）：
+        // 居中基准改成**整张卡片**（挂在包含加号的这一整行上，不再是右边那块文案区）。
+        // 卡片左右内边距对称，所以这一行的中心就是卡片的水平中心。
+        // 只显示、不吃点击，免得挡住框自己的 tap。
+        .overlay(alignment: .center) {
+            if armed {
+                Text("按 ⌘V 或者右键粘贴，点框外取消")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(Color.brandAccent)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
         }
     }
 
@@ -1087,8 +1088,9 @@ struct UploadCard: View {
         .overlay(alignment: .center) {
             if items.isEmpty && !armed && !state.isRunning {
                 Text("点击此处可粘贴")
-                    .font(.system(size: 14))
-                    .foregroundStyle(.secondary)
+                    // 用户 2026-10-29 第 2 轮第 2 条：字号 14 → 16，颜色再淡一点点。
+                    .font(.system(size: 16))
+                    .foregroundStyle(.secondary.opacity(0.85))
                     .allowsHitTesting(false)
                     .transition(.opacity)
             }
@@ -1111,10 +1113,11 @@ struct UploadCard: View {
     private let tileHeight: CGFloat = 82
     private var previewHeight: CGFloat { tileHeight * 2 + 8 }
 
-    /// 空位占位框：只有一圈很淡的虚线，没有底色 —— 看得见「这儿能放一张」，又不吵。
+    /// 空位占位框：只有一圈淡虚线，没有底色 —— 看得见「这儿能放一张」，又不吵。
+    /// 用户 2026-10-29 第 2 轮第 2 条：比第一版稍微加深一点（0.13 → 0.20）。
     private var emptySlot: some View {
         RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .strokeBorder(Color.secondary.opacity(0.13),
+            .strokeBorder(Color.secondary.opacity(0.20),
                           style: StrokeStyle(lineWidth: 1, dash: [4, 3.5]))
             .frame(height: tileHeight)
             .allowsHitTesting(false)
@@ -1179,71 +1182,79 @@ struct UploadCard: View {
     /// 格子只有 ~85pt 宽（一行 6 个），所以只放缩略图：图片铺满，PDF 显示图标 + 文件名。
     /// 文件名和大小放 `help` 里，鼠标停一下就能看全。
     /// 多于一个时左下角显示序号 —— 这是送给 AI 的顺序（不代表卷面顺序，AI 会按大标题自己排）。
+    ///
+    /// ⚠️ 尺寸由**底层的 Color** 撑住，图片只是盖在上面的 overlay（用户 2026-10-29 第 3 条）。
+    /// 以前图片直接放在 ZStack 里：`.aspectRatio(contentMode: .fill)` 会把 **ZStack 自己**撑宽
+    /// （横向图按高度填满后宽度超出格子），而 `.clipShape` 是在撑宽之后才裁的 ——
+    /// 裁的边界已经是错的宽度，于是整块格子压到隔壁格子上、大幅度重叠。
+    /// `Color` 是无限灵活的，永远只接受父级给的宽度，所以格子宽度恒等于列宽。
     private func tile(_ item: UploadItem, index: Int) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.secondary.opacity(0.07))
-
-            if let thumb = item.thumb {
-                Image(nsImage: thumb)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else {
-                VStack(spacing: 5) {
-                    Image(systemName: "doc.text.fill")
-                        .font(.system(size: 20))
-                        .foregroundStyle(Color.brandAccent.opacity(0.85))
-                    Text(item.name)
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+        Color.secondary.opacity(0.07)
+            .frame(maxWidth: .infinity, minHeight: tileHeight, maxHeight: tileHeight)
+            .overlay { tileContent(item) }
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.secondary.opacity(0.16), lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            // 点格子 = 放大预览。放在叉按钮**之前**，让右上角那个叉优先吃到点击。
+            .onTapGesture { state.openPreview(item) }
+            .overlay(alignment: .bottomLeading) {
+                if items.count > 1 {
+                    Text("\(index + 1)")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.black.opacity(0.55)))
+                        .padding(5)
                 }
-                .padding(.horizontal, 8)
             }
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: tileHeight)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.secondary.opacity(0.16), lineWidth: 1)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        // 点格子 = 放大预览。放在叉按钮**之前**，让右上角那个叉优先吃到点击。
-        .onTapGesture { state.openPreview(item) }
-        .overlay(alignment: .bottomLeading) {
-            if items.count > 1 {
-                Text("\(index + 1)")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(Capsule().fill(Color.black.opacity(0.55)))
-                    .padding(5)
+            .overlay(alignment: .topTrailing) {
+                // 右上角的圆形大叉：移除这一张。
+                // 白底深色叉（用户 2026-10-27 统一要求），描一圈淡边，浅色底上也能看清。
+                Button {
+                    state.removeUpload(item.id, for: slot)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 6.5, weight: .bold))
+                        .foregroundStyle(Color.black.opacity(0.72))
+                        .frame(width: 13, height: 13)
+                        .background(Circle().fill(Color.white))
+                        .overlay(Circle().strokeBorder(Color.black.opacity(0.16), lineWidth: 0.7))
+                        .shadow(color: .black.opacity(0.16), radius: 1.5, y: 0.5)
+                }
+                .buttonStyle(.plain)
+                .handCursor()
+                .help("移除这个文件")
+                .padding(4)
             }
-        }
-        .overlay(alignment: .topTrailing) {
-            // 右上角的圆形大叉：移除这一张。
-            // 白底深色叉（用户 2026-10-27 统一要求），描一圈淡边，浅色底上也能看清。
-            Button {
-                state.removeUpload(item.id, for: slot)
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 6.5, weight: .bold))
-                    .foregroundStyle(Color.black.opacity(0.72))
-                    .frame(width: 13, height: 13)
-                    .background(Circle().fill(Color.white))
-                    .overlay(Circle().strokeBorder(Color.black.opacity(0.16), lineWidth: 0.7))
-                    .shadow(color: .black.opacity(0.16), radius: 1.5, y: 0.5)
-            }
-            .buttonStyle(.plain)
-            .handCursor()
-            .help("移除这个文件")
-            .padding(4)
-        }
         .help("\(item.name) · \(item.sizeText)")
         .transition(.opacity.combined(with: .scale(scale: 0.96)))
+    }
+
+    /// 格子里的内容：有缩略图就铺满（溢出部分由外层 `clipShape` 裁掉），
+    /// 没有缩略图（PDF / 取不到图）就显示图标 + 文件名。
+    @ViewBuilder
+    private func tileContent(_ item: UploadItem) -> some View {
+        if let thumb = item.thumb {
+            Image(nsImage: thumb)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } else {
+            VStack(spacing: 5) {
+                Image(systemName: "doc.text.fill")
+                    .font(.system(size: 20))
+                    .foregroundStyle(Color.brandAccent.opacity(0.85))
+                Text(item.name)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .padding(.horizontal, 8)
+        }
     }
 }
 
