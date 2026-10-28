@@ -25,23 +25,25 @@ extension AppState {
     /// 以前这里复述了 70% 的 md 原文（排序、去重、去噪、保真、运行环境…），
     /// 用户 2026-10-29 明确要求砍掉：两边都在说同一件事，改一边就容易打架。
     static func promptText(paperNames: [String]) -> String {
-        let total = 1 + paperNames.count
+        // 1–2 是两份规则（固定占位），图片从 3 开始编号
+        let total = 2 + paperNames.count
         var lines: [String] = []
         lines.append("我发你 \(total) 个文件：")
         lines.append("")
-        lines.append("1.《试卷识别规则.md》—— 排版与内容规则，一切以它为准")
+        lines.append("1.《试卷识别规则.md》")
+        lines.append("2.《学生手写文章转录规则.md》")
 
         if paperNames.isEmpty {
-            lines.append("2.（没有试卷文件）")
+            lines.append("3.（没有试卷文件）")
         } else if paperNames.count == 1 {
-            lines.append("2.\(Self.quoted(paperNames))—— 待处理的内容")
+            lines.append("3.\(Self.quoted(paperNames))—— 待处理的内容")
         } else {
-            lines.append("2–\(total).\(Self.quoted(paperNames))—— 待处理的内容，共 \(paperNames.count) 张")
+            lines.append("3–\(total).\(Self.quoted(paperNames))—— 待处理的内容，共 \(paperNames.count) 张")
         }
 
         lines.append("")
         lines.append("""
-        先判断这批图是什么，再决定怎么做：**手写字符占全图文字一半以上** → 走「情况 B」，其余一律走「情况 A」。两条路完全不同，不要混。
+        先判断这批图是什么，再决定怎么做：**手写字符占全图文字的一半以上，一律走「情况 B」**，其余走「情况 A」。两条路完全不同，不要混。
         """)
         lines.append("")
         lines.append("""
@@ -51,15 +53,11 @@ extension AppState {
         lines.append("")
         lines.append("""
         ━━ 情况 B：学生手写作文 ━━
-        把这批图转录成学生作文，一篇一页。**只借用附件 1 第五条的页面设置**（页边距 2.2cm、装订线 0），附件 1 里讲试卷版式、插图占位、缺页占位的那几条都用不上。规则如下：
-
-        - 只转录学生手写的**英文正文**。图里印刷体的中文题目、说明、题号，一律不转录。
-        - 字体 **Times New Roman**、**不加粗**，字号**小四**（12pt）。
-        - **一篇作文占一页**，篇与篇之间插入分页符。学生作文不超过 300 字，一页足够；万一某篇跨了两张图，拼成一篇放一页，不要拆成两篇。
-        - 照片可能是横的、倒的，也可能卷内换页。自行判断每张图的方向和先后顺序。
-        - **忽略教师的红笔批注**：对勾、叉、分数、评语、红笔改错，一个字都不转录。
-        - **涂改以最终结果为准**：修正液盖住的、黑笔划掉的都不转录，只写涂改后留下的内容；划掉一个词在旁边重写的，写重写后的那个。
-        - **拼写照原样，不做纠正**：学生明显拼错的词照抄（`because` 写成 `becase`，就写 `becase`）。但只有你真看清了才照抄；字母形状本身容易混、你自己也拿不准的（`I` 和 `l`、`O` 和 `0`、`rn` 和 `m`、`cl` 和 `d`），一律按通顺正确的拼写写。
+        按附件 2 的规则把它转成一份学生手写文章转录（合辑）。
+        """)
+        lines.append("")
+        lines.append("""
+        【无论什么情况】如果你判断不了该走 A 还是 B，或者碰到规则里没写、你不知道该怎么处理的情况 —— **也必须照常输出完整的 Python 代码框，并在最后一行写 # ===EXAM-END===**。不要只回一段文字、不要反问我、不要空着不写。把你的疑问和不确定的地方用蓝字写进 Word 末尾那段「特别注意」里。
         """)
         lines.append("")
         lines.append("""
@@ -196,17 +194,23 @@ extension AppState {
         guard let ruleURL = AppState.bundledRule else {
             throw BridgeError.failed("App 内置的规则文件丢了，请重新安装 App")
         }
+        guard let handRuleURL = AppState.bundledHandwritingRule else {
+            throw BridgeError.failed("App 内置的手写转录规则丢了，请重新安装 App")
+        }
 
-        // 规则固定打头，后面依次是试卷的每一页。顺序保持稳定便于排查日志，
-        // 真正的页序由 AI 按卷面结构判断（提示词里已经说清楚）。
-        var uploads = [FilePayload(url: ruleURL, name: "试卷识别规则.md", mime: "text/markdown")]
+        // 两份规则固定打头（附件 1 = 试卷规则、附件 2 = 手写规则），后面依次是待处理的每一页。
+        // 顺序必须和 `promptText` 里的编号一致：1、2 是规则，图片从 3 开始。
+        var uploads = [
+            FilePayload(url: ruleURL, name: "试卷识别规则.md", mime: "text/markdown"),
+            FilePayload(url: handRuleURL, name: "学生手写文章转录规则.md", mime: "text/markdown"),
+        ]
         uploads += paperFiles.map { FilePayload(url: $0, name: $0.lastPathComponent, mime: mimeFor($0)) }
         // 不同目录下的同名文件（比如两张都叫「IMG_0001.jpg」）在附件条里分不清，
         // 而且 checkNames 是按子串匹配的，重名会互相顶掉 —— 重名时补个序号。
         uploads = dedupeNames(uploads)
 
-        // 提示词里的名字用**去重之后**的，跟附件条上显示的一致。第一个固定是规则。
-        let paperNames = uploads.dropFirst().map { $0.name }
+        // 提示词里的名字用**去重之后**的，跟附件条上显示的一致。前两个固定是规则。
+        let paperNames = uploads.dropFirst(2).map { $0.name }
         var prompt = AppState.promptText(paperNames: paperNames)
 
         // 0. 开新对话。三档，从最省事往下退：

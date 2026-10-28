@@ -81,6 +81,7 @@ struct ExamApp: App {
         if CommandLine.arguments.contains("--selftest") {
             print("bundle   = \(Bundle.main.bundlePath)")
             print("rule     = \(AppState.bundledRule?.path ?? "❌ 未找到")")
+            print("rule2    = \(AppState.bundledHandwritingRule?.path ?? "❌ 未找到")")
             print("docTypes = \(AppState.uploadTypes.map { $0.identifier }.joined(separator: ", "))")
             let rule = AppState.bundledRule.flatMap { try? String(contentsOf: $0, encoding: .utf8) }
             print("ruleHead = \(rule?.prefix(40).replacingOccurrences(of: "\n", with: " ") ?? "❌ 读不出")")

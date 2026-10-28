@@ -1410,9 +1410,16 @@ final class AppState: ObservableObject {
 
     // MARK: - 内置附件
 
-    /// 只带一份规则 md。试卷识别没有版式模板 —— 版式全在规则里写死了。
+    /// 内置附件：两份规则 md，没有版式模板 —— 版式全在规则里写死了。
+    ///
+    /// 用户 2026-10-29 第 13 轮：加了「学生手写文章」这条业务线，
+    /// 所以规则从一份变两份，**两份都要传给 AI**（提示词里按附件 1 / 附件 2 指代）。
     static var bundledRule: URL? {
         Bundle.main.url(forResource: "试卷识别规则", withExtension: "md")
+    }
+
+    static var bundledHandwritingRule: URL? {
+        Bundle.main.url(forResource: "学生手写文章转录规则", withExtension: "md")
     }
 
     /// 请求中止当前流程（用户点「中止」时）
