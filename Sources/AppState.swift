@@ -980,10 +980,10 @@ final class AppState: ObservableObject {
     // MARK: - 上传框内容（图片 / PDF）
 
     /// 图片最多几张、PDF 最多几个。
-    /// 试卷是「大批量图片」，上限放到 50 张（一整套卷子通常 8–24 页，留足余量）；
-    /// PDF 只允许 1 个 —— 一份 PDF 就是整份试卷。
+    /// 试卷是「大批量图片」，上限 **48 张**（用户 2026-10-29 定：正好 8 行 × 每行 6 个，
+    /// 预览区最多铺 8 行，再多就超出这个上限了）；PDF 只允许 1 个 —— 一份 PDF 就是整份试卷。
     static func limits(for slot: Slot) -> (images: Int, docs: Int) {
-        (images: 50, docs: 1)
+        (images: 48, docs: 1)
     }
 
     /// 剪贴板图片的下一个名字：`剪贴板图片1`、`剪贴板图片2`……（不带 `-`）
@@ -1443,7 +1443,7 @@ final class AppState: ObservableObject {
             fillImages(20)
             pollingStopped = true
             pasteArmed = .paper
-            showToast("最多 50 张图片，先移除一张再放", seconds: 8, slot: .paper)
+            showToast("最多 48 张图片，先移除一张再放", seconds: 8, slot: .paper)
             return
         case 9:
             fillImages(1)

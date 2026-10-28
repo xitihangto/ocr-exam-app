@@ -245,6 +245,9 @@ struct WindowCloseAccessor: NSViewRepresentable {
                 // 标题栏只留红绿灯，不显示“试卷识别”几个字（和界面内大标题重复）。
                 // 只隐藏标题栏文字，不改窗口本身的标题，Dock 菜单里的窗口名还在。
                 window.titleVisibility = .hidden
+                // 标题栏下面那条分隔线**常驻**（用户 2026-10-29 第 3 轮第 2 条）：
+                // 系统默认是 `.automatic`，只有滚动/悬停时才画出来，鼠标一走就消失，看着像在闪。
+                window.titlebarSeparatorStyle = .line
             }
         }
         return view
@@ -254,6 +257,7 @@ struct WindowCloseAccessor: NSViewRepresentable {
             if let window = nsView.window {
                 window.delegate = ExitConfirmWindowDelegate.shared
                 window.titleVisibility = .hidden
+                window.titlebarSeparatorStyle = .line
             }
         }
     }
@@ -872,7 +876,7 @@ struct Backdrop: View {
 ///
 ///     ┌──────────────────────────────────────────────────┐
 ///     │ 上传试卷 ✓                按 ⌘V 粘贴，点框外取消   │ ← 激活时居中，覆盖在两行之间
-///     │ 整份试卷：多张图片可一次选完，或一个 PDF，图片最多 50 张 │
+///     │ 整份试卷：多张图片可一次选完，或一个 PDF，图片最多 48 张 │
 ///     │ ┌───┐ ┌───────┐ ┌───────┐ ┌───────┐              │
 ///     │ │ + │ │ 1 卡片ⓧ│ │ 2 卡片ⓧ│ │ 3 卡片ⓧ│  ← 一行 3 张 │
 ///     │ └───┘ └───────┘ └───────┘ └───────┘   最多露 2 行  │
@@ -896,6 +900,8 @@ struct UploadCard: View {
     /// 加号 hover：自绘气泡，`.help()` 有约 1 秒系统延迟，达不到「几乎瞬间冒泡」
     @State private var plusHover = false
     @State private var cardHover = false
+    /// 「清空」按钮 hover
+    @State private var clearHover = false
 
     private var items: [UploadItem] { state.uploads[slot] ?? [] }
     private var armed: Bool { state.pasteArmed == slot }
@@ -1017,6 +1023,11 @@ struct UploadCard: View {
                             .foregroundStyle(Color.brandPink)
                     }
                     Spacer(minLength: 8)
+                    // 右上角的「清空」：有文件、且没在跑的时候才出现。
+                    // 跑的时候不给清，免得半路把附件从对话框里抽走。
+                    if filled && !state.isRunning {
+                        clearAllButton
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // 第二行恒定是「支持哪些格式 + 数量上限」，激活粘贴时也不改写。
@@ -1047,6 +1058,38 @@ struct UploadCard: View {
         }
     }
 
+    /// 卡片右上角的「清空」（用户 2026-10-29 第 3 轮第 5 条）。
+    /// 一次把框里的文件全清掉，省得一张张点右上角的叉。
+    /// 位置：标题那一行的行末 —— 也就是卡片的右上角；卡片本身有 15pt 左右内边距，
+    /// 按钮自己再留 7pt 横内边距，不会贴到边框上。
+    private var clearAllButton: some View {
+        Button {
+            state.closePasteMenu()
+            state.clearFile(for: slot)
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "trash")
+                    .font(.system(size: 9.5, weight: .semibold))
+                Text("清空")
+                    .font(.system(size: 10.5, weight: .medium))
+            }
+            .foregroundStyle(clearHover ? Color.brandRed : Color.secondary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.brandRed.opacity(clearHover ? 0.10 : 0))
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .handCursor()
+        .onHover { clearHover = $0 }
+        .animation(.easeOut(duration: 0.12), value: clearHover)
+        .help("清空这个框里的所有文件")
+        .transition(.opacity)
+    }
+
     /// 加号/文案 与 下方预览区 之间的分隔线（用户 2026-10-29 第 3 条）：
     /// 很细（1px）、很淡，只是把「说明区」和「文件区」轻轻划开，不抢视线。
     /// 上下各留 10pt，代替原来 VStack 的 11pt 间距。
@@ -1061,12 +1104,13 @@ struct UploadCard: View {
 
     // MARK: 预览区（恒定两行，一行 6 个）
 
-    /// 用户 2026-10-29 第 4 条：空白区固定分成 **两行 × 每行 6 个**，
-    /// 没文件的位置放**很淡的虚框占位**，格子尺寸恒定 ——
-    /// 不再「1 个文件就铺满一整行、3 个就三等分」，卡片也不会随文件数忽高忽低。
-    /// 超过 12 个才滚动，滚动条只在真超过时才出现。
+    /// 用户 2026-10-29 第 3 轮第 4 条：
+    /// - **12 个以内恒为 2 行**（不够的位置用虚框补齐），不随文件数变高变矮；
+    /// - **超过 12 个才加行**：13 个 → 3 行，第 3 行 5 个虚框，依次类推；
+    /// - **最多 8 行**（48 个），和 `limits` 里的图片上限对齐；
+    /// - **3 行及以上才出现滚动条**，2 行正好铺满，不出现。
     private var previewArea: some View {
-        ScrollView(.vertical, showsIndicators: items.count > slotCount) {
+        ScrollView(.vertical, showsIndicators: showsScrollbar) {
             LazyVGrid(columns: gridColumns, spacing: 8) {
                 ForEach(0..<slotCount, id: \.self) { index in
                     if index < items.count {
@@ -1076,7 +1120,7 @@ struct UploadCard: View {
                     }
                 }
             }
-            .padding(.vertical, 1)
+            .padding(.vertical, gridVPadding)
             .padding(.trailing, 3)
         }
         .frame(maxWidth: .infinity)
@@ -1088,30 +1132,39 @@ struct UploadCard: View {
         .overlay(alignment: .center) {
             if items.isEmpty && !armed && !state.isRunning {
                 Text("点击此处可粘贴")
-                    // 用户 2026-10-29 第 2 轮第 2 条：字号 14 → 16，颜色再淡一点点。
-                    .font(.system(size: 16))
-                    .foregroundStyle(.secondary.opacity(0.85))
+                    // 用户 2026-10-29 第 3 轮第 1 条：16 → 19，再淡一点。
+                    .font(.system(size: 19))
+                    .foregroundStyle(.secondary.opacity(0.6))
                     .allowsHitTesting(false)
                     .transition(.opacity)
             }
         }
     }
 
-    /// 一共几个格子：永远给满两行 12 个；超过 12 个就按 6 的倍数往上加（多出来的行靠滚动看）。
-    private var slotCount: Int {
-        max(12, ((items.count + 5) / 6) * 6)
+    /// 一共几行：12 个以内恒 2 行，超过才按需加，最多 8 行。
+    private var rowCount: Int {
+        min(8, max(2, (items.count + 5) / 6))
     }
 
-    /// 固定 6 栏（用户 2026-10-29 第 4 条：不再按文件数动态改栏数）。
+    /// 一共几个格子 = 行数 × 6（空位用虚框补齐）。
+    private var slotCount: Int { rowCount * 6 }
+
+    /// 滚动条只在 3 行及以上出现 —— 2 行正好铺满可视高度，不该有滚动条。
+    private var showsScrollbar: Bool { rowCount >= 3 }
+
+    /// 固定 6 栏（用户 2026-10-29 第 2 轮第 4 条：不再按文件数动态改栏数）。
     private var gridColumns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: 8), count: 6)
     }
 
-    /// 每个格子的高度。两行 + 行距 = 预览区高度。
-    /// 用户 2026-10-29：整框再增高，让「Word 试卷卡底部 → 窗口底边」的间距缩到原来的 0.4 倍。
-    /// 加了分隔线又多吃掉 10pt，所以格子定在 82（两行 164 + 8 = 172），实测底部间距 ~21pt。
+    /// 每个格子的高度。可视高度恒为两行 + 行距 + 上下内边距。
+    ///
+    /// ⚠️ `gridVPadding` 必须算进高度（用户 2026-10-29 第 3 轮第 3 条报的 bug）：
+    /// 之前只算了 `tileHeight * 2 + 8`，漏掉网格自己的上下各 1pt，
+    /// 内容比可视区高出 2px —— 最底下那排虚线永远被切掉一点，还能滚 1–2 像素。
     private let tileHeight: CGFloat = 82
-    private var previewHeight: CGFloat { tileHeight * 2 + 8 }
+    private let gridVPadding: CGFloat = 1
+    private var previewHeight: CGFloat { tileHeight * 2 + 8 + gridVPadding * 2 }
 
     /// 空位占位框：只有一圈淡虚线，没有底色 —— 看得见「这儿能放一张」，又不吵。
     /// 用户 2026-10-29 第 2 轮第 2 条：比第一版稍微加深一点（0.13 → 0.20）。

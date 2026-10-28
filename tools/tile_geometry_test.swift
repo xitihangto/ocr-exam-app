@@ -89,3 +89,39 @@ MainActor.assumeIsolated {
         ForEach(0..<6) { _ in NewTile() }
     }.background(Color.white), "新写法")
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 第二项：两行网格的实际高度必须**正好**等于预览区可视高度
+//
+// 用户 2026-10-29 第 3 轮第 3 条报：最底下那排虚线被切掉一点、还能滚 1–2 像素。
+// 原因：`previewHeight` 只算了 `tileHeight * 2 + 8`，漏掉网格自己的 `.padding(.vertical, 1)`，
+// 内容比可视区高 2pt，于是永远可滚。
+// 这里用 `ImageRenderer` 量网格的**理想高度**，和 `previewHeight` 的公式对比。
+
+struct EmptySlot: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(Color.secondary.opacity(0.20),
+                          style: StrokeStyle(lineWidth: 1, dash: [4, 3.5]))
+            .frame(height: 82)
+    }
+}
+
+MainActor.assumeIsolated {
+    let gridVPadding: CGFloat = 1
+    let tileHeight: CGFloat = 82
+    let previewHeight = tileHeight * 2 + 8 + gridVPadding * 2
+
+    let grid = LazyVGrid(columns: columns, spacing: 8) {
+        ForEach(0..<12) { _ in EmptySlot() }
+    }
+    .padding(.vertical, gridVPadding)
+    .frame(width: 543)          // 卡片内容区 546 - 给滚动条留的 3
+
+    let r = ImageRenderer(content: grid)
+    r.scale = 1
+    let h = r.nsImage?.size.height ?? -1
+    let ok = abs(h - previewHeight) < 0.5
+    print(String(format: "两行网格理想高度 %.1fpt ｜ 预览区可视高度 %.1fpt ｜ %@",
+                 h, previewHeight, ok ? "✓ 正好铺满，不会滚" : "✗ 不匹配，会滚或被切"))
+}
