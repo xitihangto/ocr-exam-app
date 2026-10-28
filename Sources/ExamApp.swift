@@ -1379,7 +1379,9 @@ struct UploadCard: View {
                 // 半个这个宽度，补回来正好落在卡片正中。
                 .overlay(alignment: .center) {
                     if armed {
-                        Text("按 ⌘V 或者右键粘贴，点框外取消")
+                        // 用户 2026-10-29 第 9 轮：后半句「点框外取消」→「或拖入文件」，
+                        // 让刚加的拖放功能在激活态里也看得见（字数一样，宽度不变）。
+                        Text("按 ⌘V 或者右键粘贴，或拖入文件")
                             .font(.system(size: 10.5, weight: .medium))
                             .foregroundStyle(Color.brandAccent)
                             .lineLimit(1)
