@@ -982,8 +982,9 @@ final class AppState: ObservableObject {
             guard let self = self, response == .OK else { return }
             let urls = panel.urls
             guard !urls.isEmpty else { return }
-            // 逐个放进去，放不下的由 addUpload 冒泡说明原因（超数量 / 混放 / 类型不对）
-            for url in urls { self.accept(url, for: slot) }
+            // 和粘贴 / 拖放同一套：一次选一堆也走 acceptBatch，
+            // 重复的、类型不对的、超上限的都汇总成一条提示。
+            self.acceptBatch(urls, for: slot)
             if let first = urls.first { self.rememberDirectory(first, slot: slot) }
         }
 
@@ -992,14 +993,6 @@ final class AppState: ObservableObject {
         } else {
             handle(panel.runModal())
         }
-    }
-
-    private func accept(_ url: URL, for slot: Slot) {
-        guard let item = UploadItem(url: url) else {
-            showToast("这个文件类型不支持，只收 png / jpg 图片或 PDF", slot: slot)
-            return
-        }
-        if addUpload(item, for: slot) == .added { rememberDirectory(url, slot: slot) }
     }
 
     // MARK: - 上传框内容（图片 / PDF）
@@ -1162,6 +1155,72 @@ final class AppState: ObservableObject {
     /// heic / tiff / gif 这些 NSImage 认得、但我们白名单里没有的格式，
     /// 会先被 `UploadItem(url:)` 拒掉，然后又被这一句解成图片塞进预览框。
     /// 结果就是「提示了类型不支持，文件却还是进来了」。
+    /// 一批磁盘文件统一入口：**粘贴和拖放共用**，规则完全一致
+    /// （类型白名单 / 数量上限 / 不许混放 / 内容判重）。
+    ///
+    /// 用户 2026-10-29 第 7 轮第 2 条：一批里**同时**有重复的和类型不支持的，
+    /// 两个数都要说清楚，别只报一个。
+    /// 提示优先级：超上限/混放（`addUpload` 自己已经冒过泡）> 汇总。
+    func acceptBatch(_ urls: [URL], for slot: Slot) {
+        guard !urls.isEmpty else { return }
+        var duplicates = 0
+        var unsupported = 0
+        var stopped = false
+        for url in urls {
+            guard !stopped else { break }
+            guard let item = UploadItem(url: url) else {
+                unsupported += 1          // 类型不在白名单，直接不收
+                continue
+            }
+            switch addUpload(item, for: slot, quietDuplicate: true) {
+            case .added:     break
+            case .duplicate: duplicates += 1
+            case .rejected:  stopped = true      // 超限 / 混放：addUpload 已经冒过泡，后面不再试
+            }
+        }
+        guard !stopped else { return }
+        if duplicates > 0 && unsupported > 0 {
+            showToast("有 \(duplicates) 个已经在框里了、\(unsupported) 个类型不支持，已跳过", slot: slot)
+        } else if duplicates > 0 {
+            showToast(duplicateToast(duplicates), slot: slot)
+        } else if unsupported > 0 {
+            showToast(unsupported == 1
+                      ? "这个文件类型不支持，只收 png / jpg 图片或 PDF"
+                      : "有 \(unsupported) 个文件类型不支持，已跳过，只收 png / jpg 图片或 PDF",
+                      slot: slot)
+        }
+    }
+
+    /// 把拖进来的 `NSItemProvider` 解析成文件 URL（**保持拖进来的顺序**）。
+    /// 全部回来之后再回调 —— 这样「一次拖 5 个、其中 2 个重复 1 个类型不对」
+    /// 才能只弹一条汇总提示，而不是弹三次。
+    static func resolveFileURLs(from providers: [NSItemProvider],
+                                completion: @escaping ([URL]) -> Void) {
+        guard !providers.isEmpty else { completion([]); return }
+        var slots = [URL?](repeating: nil, count: providers.count)
+        let group = DispatchGroup()
+        let lock = NSLock()
+        for (index, provider) in providers.enumerated() {
+            group.enter()
+            _ = provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
+                defer { group.leave() }
+                guard let data else { return }
+                // 正常是 plist 编码的 NSURL；个别 App 给的是 "file://…" 纯字符串，兜一手
+                var url = URL(dataRepresentation: data, relativeTo: nil)
+                if url == nil,
+                   let text = String(data: data, encoding: .utf8),
+                   text.hasPrefix("file://") {
+                    url = URL(string: text)
+                }
+                guard let url else { return }
+                lock.lock(); slots[index] = url; lock.unlock()
+            }
+        }
+        group.notify(queue: .main) {
+            completion(slots.compactMap { $0 })
+        }
+    }
+
     func pasteFromClipboard(into slot: Slot) {
         paste(from: .general, into: slot)
     }
@@ -1173,35 +1232,8 @@ final class AppState: ObservableObject {
         let urls = (pb.readObjects(forClasses: [NSURL.self], options: options) as? [URL]) ?? []
 
         if !urls.isEmpty {
-            var accepted = 0
-            var duplicates = 0
-            var unsupported = 0
-            var stopped = false
-            for url in urls {
-                guard !stopped else { break }
-                guard let item = UploadItem(url: url) else {
-                    unsupported += 1        // 类型不在白名单，直接不收
-                    continue
-                }
-                // 成功放进框里不弹提示 —— 卡片本身就是反馈，
-                // 只有「类型不对 / 重复 / 数量超了 / 混放」这种被拒的情况才冒泡。
-                // 重复的先攒着，整批走完只冒一次泡（一次粘 4 个不该弹 4 次）。
-                switch addUpload(item, for: slot, quietDuplicate: true) {
-                case .added:     accepted += 1
-                case .duplicate: duplicates += 1
-                case .rejected:  stopped = true      // addUpload 已经冒过泡，后面的不再试
-                }
-            }
-            // 提示优先级：超限/混放（addUpload 已经冒过泡）> 重复 > 类型不支持
-            if !stopped {
-                if duplicates > 0 && unsupported > 0 {
-                    showToast("有 \(duplicates) 个已经在框里了、\(unsupported) 个类型不支持，已跳过", slot: slot)
-                } else if duplicates > 0 {
-                    showToast(duplicateToast(duplicates), slot: slot)
-                } else if unsupported > 0 {
-                    showToast("这个文件类型不支持，只收 png / jpg 图片或 PDF", slot: slot)
-                }
-            }
+            // 统一交给 acceptBatch：粘贴 / 拖放 / 批量选文件同一套规则、同一条汇总提示
+            acceptBatch(urls, for: slot)
             // 不管收下几个，**文件分支到此为止**，绝不落到下面的图片分支
             return
         }

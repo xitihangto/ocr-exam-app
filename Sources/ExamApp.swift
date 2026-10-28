@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import QuickLookUI
 import PDFKit
+import UniformTypeIdentifiers
 
 // MARK: - 品牌色
 
@@ -183,13 +184,32 @@ struct ExamApp: App {
             let bad = run([tiff])
             let good = run([png])
 
+            // 混合批次（用户 2026-10-29 第 7 轮第 2 条）：同一批里既有重复、又有类型不支持的，
+            // 提示必须两件事都说到，而且框里只多进合法的那一个。
+            let mixedApp = AppState()
+            func feed(_ list: [URL]) {
+                let pb = NSPasteboard(name: .init("exam-paste-test-\(UUID().uuidString)"))
+                pb.clearContents()
+                pb.writeObjects(list.map { $0 as NSURL })
+                mixedApp.paste(from: pb, into: .paper)
+            }
+            feed([png])                 // 先放一张进去
+            feed([png, tiff])           // 再来：同一张（重复）+ 一个 tiff（不支持）
+
             var lines: [String] = []
             lines.append("粘 .tiff → 框里 \(bad.count) 个（应为 0）  文件：\(bad.names)")
             lines.append("          提示：\(bad.toast ?? "无")")
             lines.append("粘 .png  → 框里 \(good.count) 个（应为 1）  文件：\(good.names)")
+            lines.append("混合批次 → 框里 \(mixedApp.items(for: .paper).count) 个（应为 1）")
+            lines.append("          提示：\(mixedApp.toast ?? "无")")
             FileHandle.standardError.write(Data((lines.joined(separator: "\n") + "\n").utf8))
 
-            let ok = bad.count == 0 && good.count == 1
+            let mixedToast = mixedApp.toast ?? ""
+            let ok = bad.count == 0
+                && good.count == 1
+                && mixedApp.items(for: .paper).count == 1
+                && mixedToast.contains("已经在框里")
+                && mixedToast.contains("类型不支持")
             exit(ok ? 0 : 1)
         }
 
@@ -1068,11 +1088,58 @@ struct Backdrop: View {
 /// 占整行会把框撑高、620×720 的固定窗口就装不下了），所以空位用透明占位撑住。
 /// 「点击此处粘贴文件」那个标签已经删了（用户说多余），
 /// 粘贴提示改由副标题临时改写承担，不占额外高度。
-/// 预览区的滚动偏移（自绘滚动条用）。
-/// 探针是网格背后的一个 `GeometryReader`：它相对滚动可视区顶部的 `minY` 取反就是偏移。
-struct PreviewScrollKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+/// 读预览区的滚动偏移（自绘滚动条用）。
+///
+/// ⚠️ 为什么不用 `GeometryReader + .frame(in: .named(...))`，也不用 `.frame(in: .global)` 两个探针相减
+/// （用户 2026-10-29 第 7 轮第 1 条报的 bug「滚动条不滚动」）：
+/// 实测（离屏窗口里程序化滚到 90 再读）—— 两种 SwiftUI 侧的做法**都读不到变化**：
+/// 命名空间解析不出来、`minY` 恒为 0；`.global` 那两个探针在滚动时也完全不重新求值。
+/// 唯一可靠的是直接盯住 ScrollView 背后的 `NSScrollView`：
+/// 给它的 `contentView` 打开 `postsBoundsChangedNotifications`，滚一下就读到新的 `bounds.origin.y`。
+/// 同一套离屏测试里这个方案读到的正好是 90。
+struct ScrollOffsetReader: NSViewRepresentable {
+    let onChange: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> NSView { ReaderView(onChange: onChange) }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? ReaderView)?.onChange = onChange
+    }
+
+    final class ReaderView: NSView {
+        var onChange: (CGFloat) -> Void
+        private weak var clip: NSView?
+
+        init(onChange: @escaping (CGFloat) -> Void) {
+            self.onChange = onChange
+            super.init(frame: .zero)
+        }
+        required init?(coder: NSCoder) { fatalError("init(coder:) 未实现") }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            // 挂到窗口之后再找外层滚动视图，一次性接上
+            DispatchQueue.main.async { [weak self] in self?.attach() }
+        }
+
+        private func attach() {
+            guard let scroll = enclosingScrollView else { return }
+            let c = scroll.contentView
+            clip = c
+            c.postsBoundsChangedNotifications = true
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(boundsChanged),
+                name: NSView.boundsDidChangeNotification, object: c)
+            boundsChanged()
+        }
+
+        @objc private func boundsChanged() {
+            guard let clip else { return }
+            onChange(clip.bounds.origin.y)
+        }
+
+        deinit { NotificationCenter.default.removeObserver(self) }
+    }
 }
 
 struct UploadCard: View {
@@ -1088,6 +1155,8 @@ struct UploadCard: View {
     @State private var clearHover = false
     /// 预览区当前滚动偏移（自绘滚动条用）
     @State private var scrollOffset: CGFloat = 0
+    /// 有文件正被拖到卡片上方（拖放高亮用）
+    @State private var dropTargeted = false
 
     private var items: [UploadItem] { state.uploads[slot] ?? [] }
     private var armed: Bool { state.pasteArmed == slot }
@@ -1099,6 +1168,8 @@ struct UploadCard: View {
     }
 
     private var borderColor: Color {
+        // 拖放悬停时和「等待粘贴」用同一个强调色，用户一眼能看出「松手就收下」
+        if dropTargeted { return Color.brandAccent.opacity(0.75) }
         if armed { return Color.brandAccent.opacity(0.75) }
         return Color.secondary.opacity(filled ? 0.22 : 0.28)
     }
@@ -1128,16 +1199,26 @@ struct UploadCard: View {
                         shadowRadius: filled || armed ? 14 : 6)
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(armed ? Color.brandAccent.opacity(0.06)
+                .fill(armed || dropTargeted ? Color.brandAccent.opacity(0.06)
                             : Color.brandAccent.opacity(cardHover ? 0.03 : 0))
                 .allowsHitTesting(false)
         )
         .overlay(
             // 实线：虚线框在浅色背景上发飘，用户 2026-10-27 明确要求改实线
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(borderColor, lineWidth: armed ? 1.4 : 1)
+                .strokeBorder(borderColor, lineWidth: armed || dropTargeted ? 1.4 : 1)
                 .allowsHitTesting(false)
         )
+        // 拖放（用户 2026-10-29 第 7 轮第 2 条）：
+        // 和粘贴/选文件走**完全同一套**规则 —— 类型白名单、数量上限、不许混放、内容判重，
+        // 由 `state.acceptBatch` 统一处理，提示也是同一条汇总文案。
+        .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
+            guard !state.isRunning, !providers.isEmpty else { return false }
+            AppState.resolveFileURLs(from: providers) { urls in
+                state.acceptBatch(urls, for: slot)
+            }
+            return true
+        }
         .overlay {
             // 右键：激活本框 + 在鼠标位置冒出「粘贴 / 取消」小菜单（用户 2026-10-27）。
             // 窗口失焦时的第一次左键也在这里接（否则会被 AppKit 吞掉），转成「激活」。
@@ -1360,17 +1441,13 @@ struct UploadCard: View {
             .padding(.vertical, gridVPadding)
             .padding(.trailing, scrollBarGutter)
             .background(
-                // 只为读滚动位置：一条 0 高度的探针，把内容相对可视区顶部的偏移报上来。
-                GeometryReader { g in
-                    Color.clear.preference(key: PreviewScrollKey.self,
-                                           value: -g.frame(in: .named("previewScroll")).minY)
+                // 探针：直接读外层 NSScrollView 的 contentView.bounds.origin.y。
+                // 阈值内不写，免得每帧都触发重绘。
+                ScrollOffsetReader { y in
+                    let value = max(0, y)
+                    if abs(scrollOffset - value) > 0.5 { scrollOffset = value }
                 }
             )
-        }
-        .coordinateSpace(name: "previewScroll")
-        .onPreferenceChange(PreviewScrollKey.self) { value in
-            // 阈值一下就不写，免得每帧都触发一次重绘
-            if abs(scrollOffset - value) > 0.5 { scrollOffset = value }
         }
         .frame(maxWidth: .infinity)
         .frame(height: previewHeight)
