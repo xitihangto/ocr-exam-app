@@ -430,7 +430,7 @@ extension AppState {
         var clicksIneffective = 0
         var lastStageKey = ""
         var loggedMain = false
-        var endMarkRounds = 0
+        var endMarkSeen = false
         var lastChangeAt = Date()
 
         func announce(_ key: String, _ title: String, _ detail: String = "") {
@@ -468,17 +468,23 @@ extension AppState {
             }
 
             // 结束标记随时判定：即使 generating 还报 true（停止按钮残留 / 纯图标没认出来），
-            // 只要标记连续两轮都在，就说明代码本身写完了，不用等到“没在生成”才认。
-            // 下面的旧结束标记分支已删掉，避免一轮里重复计数、两轮变一轮。
+            // 只要标记在，就说明代码本身写完了，不用等到“没在生成”才认。
+            //
+            // 2026-10-29 用户定：**看到标记只等 3 秒，不要乘 2**。
+            // 以前是「连续两轮都在」，而轮间隔受页面变化影响，实测白等 6 秒。
+            // 现在固定成：第一次看到 → 睡 3 秒 → 再看一眼还在就收工。
             if hasEndMark {
-                endMarkRounds += 1
-                if endMarkRounds >= 2 {
-                    log("看到结束标记 # ===EXAM-END===，判定写完")
-                    say("脚本写完了", detail: "正在把它取回来…", running: true)
-                    return try grabScript()
+                if !endMarkSeen {
+                    endMarkSeen = true
+                    log("看到结束标记 # ===EXAM-END===，等 3 秒确认")
+                    Thread.sleep(forTimeInterval: 3.0)
+                    continue
                 }
+                log("结束标记仍在，判定写完")
+                say("脚本写完了", detail: "正在把它取回来…", running: true)
+                return try grabScript()
             } else {
-                endMarkRounds = 0
+                endMarkSeen = false
             }
 
             // —— 统一播报（用户要求）：内部每轮判断增长，但状态框每轮只报下面这一句，持续不断。

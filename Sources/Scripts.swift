@@ -71,7 +71,7 @@ enum Scripts {
     // 每次都靠重载根地址兜底。既然从来没生效，就别留着骗人：新对话统一走
     // `BrowserController.loadDeepSeek(force: true)` 重载根地址，见 Pipeline 第 0 步。
 
-    /// 探测输入区结构，同时检查「深度思考」和「智能搜索」是否都已激活。
+    /// 探测输入区结构，同时检查「深度思考」和「智能搜索」是否还开着（开着要被点掉）。
     ///
     /// 开关的配色会随 DeepSeek 的主题和版本变化，不能只认某两个蓝色 RGB 值；优先
     /// 使用 aria/data 状态和 class，再把颜色作为兜底。未激活时返回真实可点击元素的
@@ -334,10 +334,12 @@ enum Scripts {
         out.codeTail=clean.slice(-90);
 
         // 【最强信号】AI 按提示词要求在最后一行打的结束标记。
-        // ⚠️ 这里是 EXAM-END，不是作文版的 ESSAY-END ——
-        // 本工程是从作文版克隆的，这一行当初漏改，导致标记永远匹配不上，
-        // 判定只能退回 save / main 两个弱信号（用户 2026-10-29 复查提示词时发现）。
-        out.hasEndMark=/#\s*===EXAM-END===/i.test(clean.slice(-300));
+        // ⚠️ 必须用未剥注释的 `code`，不能用上面的 `clean`：
+        // 结束标记本身就是一行 `#` 注释，而 clean 已经把尾部注释行全剥掉了，
+        // 用 clean 判断就永远匹配不上（2026-10-29 实测：一轮 101 秒里白等 6 秒就是它）。
+        // ⚠️ 另外这里是 EXAM-END，不是作文版的 ESSAY-END —— 本工程从作文版克隆，
+        // 这一行当初漏改过，别再改回去。
+        out.hasEndMark=/#\s*===EXAM-END===/i.test(code.slice(-300));
 
         // 收尾标志一：末尾出现 .save(...) 调用（规则要求最后 doc.save，实测 AI 常写 b.save(OUT_NAME)）
         // 括号必须闭合，否则「b.save(OUT_NA」这种写了一半的也会算进来
