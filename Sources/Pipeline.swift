@@ -126,6 +126,7 @@ extension AppState {
         isRunning = true
         stopRequested = false
         progressLines = []
+        lastLogAt = nil          // 新一轮从零计时，别把上一轮的间隔带过来
         docx = .idle
 
         // 先把框里的文件拷到局部变量，再把上传框清空 —— 顺序反了就拿不到文件了。

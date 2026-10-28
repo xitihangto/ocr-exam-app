@@ -168,11 +168,16 @@ enum PythonRunner {
         var seen = Set<String>()
         var produced: [URL] = []
         let allowed: Set<String> = ["docx", "doc", "md", "txt", "pdf", "py"]
+        // 注意 /var 是 /private/var 的软链：脚本里的 os.path.abspath 会把路径解析成
+        // /private/var/…，而 NSTemporaryDirectory() 给的是 /var/…。直接比字符串会判成
+        // 「不在工作目录里」而把产物丢掉，所以两边都解析一次软链再比。
+        let workRoot = workDir.resolvingSymlinksInPath().path
 
         func consider(_ url: URL) {
             let path = url.standardizedFileURL.path
             guard !seen.contains(path), fm.fileExists(atPath: path) else { return }
-            guard path.hasPrefix(workDir.path) else { return }
+            let realPath = url.resolvingSymlinksInPath().path
+            guard realPath.hasPrefix(workRoot) || path.hasPrefix(workDir.path) else { return }
             let name = url.lastPathComponent
             guard !name.hasPrefix("_wb_") else { return }
             guard allowed.contains(url.pathExtension.lowercased()) else { return }

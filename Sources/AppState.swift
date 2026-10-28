@@ -413,9 +413,25 @@ final class AppState: ObservableObject {
     }
 
     /// 技术日志：只进内存，不再往界面上贴
+    /// 上一行日志的时间，用来算「这一行离上一行过了多久」。
+    /// 加时间戳是为了让「到底哪一段慢」一眼可见 —— 用户 2026-10-29 报上传慢，
+    /// 没有时间戳的话只能看到一长串步骤，看不出哪一步吃掉了时间。
+    var lastLogAt: Date?
+    private static let logClock: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
+
     func log(_ line: String) {
         if Thread.isMainThread {
-            progressLines.append(line)
+            let now = Date()
+            var prefix = Self.logClock.string(from: now)
+            if let last = lastLogAt {
+                prefix += String(format: " +%4.1fs", now.timeIntervalSince(last))
+            }
+            lastLogAt = now
+            progressLines.append("\(prefix) \(line)")
             if progressLines.count > 400 { progressLines.removeFirst(200) }
         } else {
             DispatchQueue.main.async { self.log(line) }
@@ -1563,6 +1579,17 @@ final class AppState: ObservableObject {
                 }
                 guard let result = payload else { return }
                 self.scriptOutput = result.output.isEmpty ? "（脚本没有任何输出）" : result.output
+
+                // 结果必须进日志：以前这里什么都不记，出了问题只能看到「脚本已执行」，
+                // 分不清是脚本报错、还是跑完了但没产出文件。2026-10-29 真实跑第一轮时踩到。
+                self.log("脚本结束：退出码 \(result.exitCode)，"
+                         + "输出 \(result.output.isEmpty ? "空" : "\(result.output.count) 字符")")
+                self.log(result.producedFiles.isEmpty
+                         ? "没有产出任何文件"
+                         : "产出：\(result.producedFiles.map { $0.lastPathComponent }.joined(separator: "、"))")
+                if !result.output.isEmpty {
+                    self.log("输出末尾：\(result.output.suffix(400))")
+                }
 
                 if result.cancelled {
                     self.docx = .idle
