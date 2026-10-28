@@ -556,28 +556,52 @@ extension AppState {
 
                 if r.hasPrefix("REAL_MOUSE") || r.hasPrefix("CLICKED:") {
                     log("点「继续」第 \(clicksTried) 次 → \(r)")
-                    // DeepSeek 点完「继续」要先「想」一会儿才开始吐字，实测远超 3 秒。
-                    // 等太短会把有效点击误判成无效，两次就直接抛错了。
-                    var grew = false
-                    for attempt in 0..<6 {
-                        Thread.sleep(forTimeInterval: 2.0)
-                        if let now = try? self.textLength(), now > before {
-                            grew = true
-                            log("继续生效（约 \(2 * (attempt + 1)) 秒后开始出字，涨了 \(now - before) 字）")
+
+                    // 【2026-10-29】判据换了：不看「12 秒内有没有涨字」，看「按钮有没有消失」。
+                    //
+                    // 用户实测：手点下去按钮**瞬间消失**，绝不会变成「停止」。
+                    // 日志证据：有一次点了正好 12.0 秒才出字（卡在 6 次轮询的边界上），
+                    // 再慢半秒就会被判成无效、多点一次 —— 而多点会把生成掐死（上次的坑）。
+                    // 点击被接受 ≠ 立刻出字，AI 点完「继续」要先重新想十几秒。
+                    var buttonGone = false
+                    for _ in 0..<3 {
+                        Thread.sleep(forTimeInterval: 0.2)
+                        if let gone = try? self.continueButtonGone(), gone {
+                            buttonGone = true
                             break
                         }
                     }
-                    if grew {
-                        clicksIneffective = 0
-                        lastChangeAt = Date()
-                        // 分段开始必须在状态框里留一句：第 1 段是原生的，第 1 次点“继续”就是第 2 段开始。
-                        // 自动点“继续”本身不动（用户要求），一般最多 3 段、点两次，5 次上限只是兜底，不改。
-                        // 点完后下一轮就是 5 秒播报重新开始，直到结束。
-                        say("第 \(clicksTried + 1) 段开始生成", detail: "代码目前 \(codeLen) 字，正在等它继续输出",
-                            running: true)
+
+                    if buttonGone {
+                        log("按钮已消失，点击被页面接受")
+                        // 点击成功后就安心等它出字。实测最长 12 秒以上，这里给 24 秒。
+                        var grew = false
+                        for attempt in 0..<12 {
+                            Thread.sleep(forTimeInterval: 2.0)
+                            if let now = try? self.textLength(), now > before {
+                                grew = true
+                                log("继续生效（约 \(2 * (attempt + 1)) 秒后开始出字，涨了 \(now - before) 字）")
+                                break
+                            }
+                        }
+                        if grew {
+                            clicksIneffective = 0
+                            lastChangeAt = Date()
+                            // 分段开始必须在状态框里留一句：第 1 段是原生的，第 1 次点“继续”就是第 2 段开始。
+                            // 自动点“继续”本身不动（用户要求），一般最多 3 段、点两次，5 次上限只是兜底，不改。
+                            // 点完后下一轮就是 5 秒播报重新开始，直到结束。
+                            say("第 \(clicksTried + 1) 段开始生成", detail: "代码目前 \(codeLen) 字，正在等它继续输出",
+                                running: true)
+                        } else {
+                            // 按钮消失了却没出字：点击是有效的，只是 AI 还在想。
+                            // 绝不能重复点击（会掐死生成），交给外层循环和 10 分钟总超时兜底。
+                            log("按钮已消失但 24 秒未见新内容，继续等，不重复点击")
+                        }
                     } else {
+                        // 按钮还在 = 这次点击被吞了（窗口刚激活 / 页面没有 hover 状态）。
+                        // 立刻补一次，不用干等 12 秒。
                         clicksIneffective += 1
-                        log("点了 12 秒仍无新内容（无效 \(clicksIneffective)/2）")
+                        log("点了 0.6 秒按钮仍在，这次点击被吞了（无效 \(clicksIneffective)/2）")
                     }
                 } else {
                     clicksIneffective += 1
@@ -704,6 +728,12 @@ extension AppState {
         }
 
         return "LOCATE_UNSTABLE:\(lastRaw.prefix(60))"
+    }
+
+    /// 「继续」按钮还在不在（只探测，不滚动、不点击、无副作用）
+    private func continueButtonGone() throws -> Bool {
+        let raw = try self.js(Scripts.probeContinue)
+        return raw.trimmingCharacters(in: .whitespacesAndNewlines) == "NO"
     }
 
     /// 把页面上的代码块取回来，挑出最像「生成试卷」的那段

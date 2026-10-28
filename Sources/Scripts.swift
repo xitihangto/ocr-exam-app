@@ -552,6 +552,27 @@ enum Scripts {
     })()
     """#
 
+    /// 只判断「继续」按钮还在不在 —— 不滚动、不点击、无副作用。
+    ///
+    /// 用途：判断上一次点击到底有没有被页面接受。用户 2026-10-29 实测——
+    /// 手点下去按钮**瞬间消失**，绝不会变成「停止」，所以「按钮还在不在」
+    /// 比「12 秒内有没有涨字」可靠得多（AI 点完要先想十几秒才出字）。
+    static let probeContinue = #"""
+    (function(){
+      var all=document.querySelectorAll('button,[role=button]');
+      for(var i=0;i<all.length;i++){
+        var b=all[i];
+        if(b.offsetParent===null) continue;
+        var st=getComputedStyle(b);
+        if(st.visibility==='hidden'||parseFloat(st.opacity||'1')<0.1) continue;
+        var t=(b.innerText||'').replace(/\s+/g,'').trim();
+        if(!t||t.length>8) continue;
+        if(/^(继续|继续生成|继续回复|继续输出)$/.test(t)||/^continue$/i.test(t)) return 'YES';
+      }
+      return 'NO';
+    })()
+    """#
+
     /// 把 Swift 字符串安全地塞进 JS 源码里（转义引号、换行、反斜杠、emoji 都能过）
     private static func jsString(_ s: String) -> String {
         guard let data = try? JSONSerialization.data(
