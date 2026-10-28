@@ -913,8 +913,8 @@ struct UploadCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
-            header
-            actionRow
+            headerRow
+            previewArea
         }
         .padding(.horizontal, 15)
         .padding(.vertical, 13)
@@ -995,78 +995,69 @@ struct UploadCard: View {
         .animation(.easeOut(duration: 0.18), value: items.count)
     }
 
-    // MARK: 标题区
+    // MARK: 标题行（加号在左，两行文案在右）
 
-    private var header: some View {
-        // 两行间距 2 → 6（用户 2026-10-27 截图反馈：贴得太近）。框会因此高 4pt，
-        // 下面的元素顺着往下走 —— 外层是 VStack + ScrollView，不用额外处理。
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Text(title)
-                    .font(.system(size: 14.5, weight: .semibold))
-                if filled {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.green.opacity(0.9))
-                } else {
-                    Text("＊必选")
-                        .font(.system(size: 10.5, weight: .medium))
-                        .foregroundStyle(Color.brandPink)
+    /// 用户 2026-10-29 要求：加号不再是单独一行，改成 flex —— 左边一个加号方块，
+    /// 右边两行文案。这样第一行不再被 46pt 高的加号撑着，纵向省下一整行。
+    private var headerRow: some View {
+        HStack(alignment: .center, spacing: 10) {
+            plusButton
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text(title)
+                        .font(.system(size: 14.5, weight: .semibold))
+                    if filled {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.green.opacity(0.9))
+                    } else {
+                        Text("＊必选")
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(Color.brandPink)
+                    }
+                    Spacer(minLength: 8)
+                    // 等待粘贴时这行右边冒出提示。以前是压在标题正中的 overlay，
+                    // 加号移到左边之后这里有了右侧空白，直接排在行末更省事、也不会撞标题。
+                    if armed {
+                        Text("按 ⌘V 或者右键粘贴，点框外取消")
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(Color.brandAccent)
+                            .lineLimit(1)
+                            .fixedSize()
+                            .transition(.opacity)
+                    }
                 }
-                Spacer(minLength: 8)
+                // 第二行恒定是「支持哪些格式 + 数量上限」，激活粘贴时也不改写。
+                // 窄窗口下按 0.9 缩一点，宁可小一号也不要截断成「…图片最多…」。
+                Text(subtitle + limitText)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.9)
+                    .truncationMode(.tail)
             }
-            // 「按 ⌘V 粘贴」放在第一行（用户 2026-10-27）：第二行要放完整的格式与数量说明，
-            // 蓝色提示压在上面会把它盖掉。**水平居中而不是靠右**（同日第二次反馈）——
-            // 用 overlay 而不是 HStack 里的 Spacer：居中不占布局宽度，标题长短变化时它也不会左右跳。
-            // 标题很短（「上传试卷」＋＊必选 ≈ 120pt），居中位置（≈212pt 起）不会撞上。
-            .overlay(alignment: .center) {
-                if armed {
-                    // 右键也能直接粘贴（用户 2026-10-27），文案跟着写全
-                    Text("按 ⌘V 或者右键粘贴，点框外取消")
-                        .font(.system(size: 10.5, weight: .medium))
-                        .foregroundStyle(Color.brandAccent)
-                        .lineLimit(1)
-                        .fixedSize()
-                        .transition(.opacity)
-                }
-            }
-            // 第二行恒定是「支持哪些格式 + 数量上限」，激活粘贴时也不再改写成别的文字。
-            // 加上数量后这句变长了，窄窗口下按 0.9 缩一点，宁可小一号也不要截断成「…图片最多…」。
-            Text(subtitle + limitText)
-                .font(.system(size: 11.5))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.9)
-                .truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
-    // MARK: 操作行（加号 + 预览网格）
+    // MARK: 预览区（两行，一行 6 个）
 
-    /// 加号在左，右边是预览卡片的网格：一行最多 3 张、最多露 2 行，再多就框内滚动。
-    /// 试卷常常是十几二十张照片，v0.18 那种「恒定三等分」一屏只放得下 3 张，装不下。
-    private var actionRow: some View {
-        HStack(alignment: .top, spacing: 9) {
-            plusButton
-            if items.isEmpty {
-                Color.clear
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 46)
-            } else {
-                ScrollView(.vertical, showsIndicators: items.count > columnCount * 2) {
-                    LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 8) {
-                        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                            previewCard(item, index: index)
-                        }
-                    }
-                    .padding(.vertical, 1)
-                    .padding(.trailing, 3)
+    /// 用户 2026-10-29 要求：预览分两行、每行约 6 个，空出来的高度就给这块。
+    /// 高度**固定**（永远是两行），空框和放满之间切换时卡片不会忽高忽低，
+    /// 下面的进度卡、Word 卡也就不会跟着上下跳。
+    private var previewArea: some View {
+        ScrollView(.vertical, showsIndicators: items.count > columnCount * 2) {
+            LazyVGrid(columns: gridColumns, spacing: 8) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    tile(item, index: index)
                 }
-                .frame(maxWidth: .infinity)
-                .frame(height: gridHeight)
             }
+            .padding(.vertical, 1)
+            .padding(.trailing, 3)
         }
-        // 空框时的一句提示：**水平居中**、灰色、14pt、不加粗。
+        .frame(maxWidth: .infinity)
+        .frame(height: previewHeight)
+        // 空框时的一句提示：**在本行居中**（用户 2026-10-29 第一条）。
         // 它只是文案：不挂手势、也不吃点击（allowsHitTesting(false)），
         // 点它跟点框里其他空白处一样，落到框自己的 tap 上。
         // 有文件时 / 已经在等粘贴时 / 正在跑的时候都不显示。
@@ -1081,18 +1072,18 @@ struct UploadCard: View {
         }
     }
 
-    /// 一行放几张：只有 1 个文件（通常是 PDF）就整行铺开，否则三等分。
-    private var columnCount: Int { items.count == 1 ? 1 : 3 }
+    /// 一行几个：1–3 个文件时按个数分栏（只放一个 PDF 时就是整行铺开），4 个起固定 6 栏。
+    private var columnCount: Int {
+        items.count <= 3 ? max(items.count, 1) : 6
+    }
 
     private var gridColumns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: 8), count: columnCount)
     }
 
-    /// 最多露两行，再多就在框内滚动 —— 620×720 的固定窗口还得装下进度卡和 Word 卡。
-    private var gridHeight: CGFloat {
-        let rows = min(2, Int(ceil(Double(items.count) / Double(columnCount))))
-        return CGFloat(rows) * 46 + CGFloat(max(rows - 1, 0)) * 8 + 2
-    }
+    /// 每个格子的高度。两行 + 行距 = 预览区高度。
+    private let tileHeight: CGFloat = 72
+    private var previewHeight: CGFloat { tileHeight * 2 + 8 }
 
     private var plusButton: some View {
         Button {
@@ -1125,8 +1116,9 @@ struct UploadCard: View {
         .overlay(alignment: .topLeading) { uploadTooltip }
     }
 
-    /// 自绘气泡：0.07 秒淡入，不挡鼠标。往上浮 26pt 压在副标题上 ——
-    /// 这是 tooltip 该有的样子（短暂、盖住内容、走开就消失）。
+    /// 自绘气泡：0.07 秒淡入，不挡鼠标。
+    /// 加号现在在卡片左上角，往上浮会溢出卡片边界，所以改成**往下**冒，
+    /// 正好压在预览区第一行上 —— tooltip 该有的样子（短暂、盖住内容、走开就消失）。
     /// 靠左对齐而不是居中：气泡比加号宽得多，居中会溢出卡片左边缘。
     @ViewBuilder
     private var uploadTooltip: some View {
@@ -1141,55 +1133,63 @@ struct UploadCard: View {
                         .fill(Color(nsColor: .darkGray).opacity(0.95))
                 )
                 .fixedSize()
-                .offset(y: -26)
+                .offset(y: 50)
                 .allowsHitTesting(false)
                 .transition(.opacity)
         }
     }
 
-    // MARK: 预览卡片（三等分，一行装完）
+    // MARK: 预览格子（两行，一行最多 6 个）
 
-    /// 卡片很窄（约 160pt），所以做成一行的紧凑版：
-    /// 缩略图 + 文件名/大小两行小字，右上角一个小圆叉。
-    /// 多于一个时，最左边显示 1/2/3 序号 —— 3 张照片就是第 1/2/3 页，
-    /// AI 只能按附件顺序理解，序号错了整份卷子就乱。
-    private func previewCard(_ item: UploadItem, index: Int) -> some View {
-        HStack(spacing: 5) {
+    /// 格子只有 ~85pt 宽（一行 6 个），所以只放缩略图：图片铺满，PDF 显示图标 + 文件名。
+    /// 文件名和大小放 `help` 里，鼠标停一下就能看全。
+    /// 多于一个时左下角显示序号 —— 这是送给 AI 的顺序（不代表卷面顺序，AI 会按大标题自己排）。
+    private func tile(_ item: UploadItem, index: Int) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.secondary.opacity(0.07))
+
+            if let thumb = item.thumb {
+                Image(nsImage: thumb)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                VStack(spacing: 5) {
+                    Image(systemName: "doc.text.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(Color.brandAccent.opacity(0.85))
+                    Text(item.name)
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .padding(.horizontal, 8)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: tileHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.16), lineWidth: 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        // 点格子 = 放大预览。放在叉按钮**之前**，让右上角那个叉优先吃到点击。
+        .onTapGesture { state.openPreview(item) }
+        .overlay(alignment: .bottomLeading) {
             if items.count > 1 {
                 Text("\(index + 1)")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 8)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(Color.black.opacity(0.55)))
+                    .padding(5)
             }
-            thumbnail(item)
-            VStack(alignment: .leading, spacing: 0) {
-                Text(item.name)
-                    .font(.system(size: 10.5, weight: .medium))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text(item.sizeText)
-                    .font(.system(size: 9))
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
         }
-        .padding(.leading, 4)
-        .padding(.trailing, 17)          // 给右上角的叉留位置，别压住文件名
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: 46)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.secondary.opacity(0.07))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(Color.secondary.opacity(0.16), lineWidth: 1)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        // 点卡片 = 放大预览。放在叉按钮**之前**，让右上角那个叉优先吃到点击。
-        .onTapGesture { state.openPreview(item) }
         .overlay(alignment: .topTrailing) {
-            // 卡片右上角的圆形大叉：移除这一张。
+            // 右上角的圆形大叉：移除这一张。
             // 白底深色叉（用户 2026-10-27 统一要求），描一圈淡边，浅色底上也能看清。
             Button {
                 state.removeUpload(item.id, for: slot)
@@ -1205,35 +1205,10 @@ struct UploadCard: View {
             .buttonStyle(.plain)
             .handCursor()
             .help("移除这个文件")
-            .padding(3)
+            .padding(4)
         }
+        .help("\(item.name) · \(item.sizeText)")
         .transition(.opacity.combined(with: .scale(scale: 0.96)))
-    }
-
-    @ViewBuilder
-    private func thumbnail(_ item: UploadItem) -> some View {
-        // 36 不是 24：用户 2026-10-27 说「圆角方块和卡片外框的边距太大」。
-        // 卡片高 46，缩略图 36 → 上下各 5，比原来（38 / 24，上下各 7）贴得紧。
-        if let thumb = item.thumb {
-            Image(nsImage: thumb)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: 36, height: 36)
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.8)
-                )
-        } else {
-            Image(systemName: "doc.text.fill")
-                .font(.system(size: 14))
-                .foregroundStyle(Color.brandAccent.opacity(0.85))
-                .frame(width: 36, height: 36)
-                .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(Color.brandAccent.opacity(0.10))
-                )
-        }
     }
 }
 

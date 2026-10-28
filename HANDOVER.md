@@ -173,7 +173,7 @@ ocr-exam-app/
 | 文件类型 | docx | doc/docx/pdf/png/jpg | **pdf/png/jpg**（doc/docx 不收，已经有字不用 OCR） |
 | 内置附件 | 规则 md + 模板 docx | 规则 md + 模板 docx | **只有规则 md**（无模板） |
 | 结束标记 | `# ===LECTURE-END===` | `# ===ESSAY-END===` | `# ===EXAM-END===` |
-| 上传框布局 | 三等分 3 格 | 三等分 3 格 | **自适应网格，一行 3 张、最多露 2 行、超出滚动** |
+| 上传框布局 | 三等分 3 格 | 三等分 3 格 | **加号在左、文案在右；预览两行、一行 6 个、超出滚动** |
 | 粘贴多文件 | 拒绝 | 拒绝 | **逐个收下**（批量试卷常一次复制一堆图） |
 | 主题色 | 蓝青绿 | 品红 | **紫罗兰（#7D3DED 强调 / #FBF9FE 底）** |
 | 产物命名 | 讲义-时间 | 批改-时间 | **试卷-时间** |
@@ -183,8 +183,8 @@ ocr-exam-app/
 
 - 槽位：`AppState.Slot` 只有 `.paper` 一个 case；`uploads: [Slot: [UploadItem]]` 仍是字典（改起来省事）
 - 上限：`AppState.limits(for:)` → `(images: 50, docs: 1)`
-- 网格：`UploadCard.actionRow` + `columnCount` / `gridColumns` / `gridHeight`
-  （`columnCount` 在只有 1 个文件时返回 1，PDF 卡片整行铺开）
+- 网格：`UploadCard.previewArea` + `columnCount` / `gridColumns` / `tileHeight` / `previewHeight`
+  （1–3 个文件按个数分栏、4 个起固定 6 栏；高度恒为两行，空框也是这么高，卡片不会忽高忽低）
 - 提示词：`AppState.promptText(paperNames:)`，按实际附件拼，**不写死文件名**
 - 上传顺序：`Pipeline.pipeline()` 里 `uploads = [规则] + 试卷各页`，`paperNames = uploads.dropFirst()`
 - 规则文件：`AppState.bundledRule` → `试卷识别规则.md`
