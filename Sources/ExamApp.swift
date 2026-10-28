@@ -145,6 +145,54 @@ struct ExamApp: App {
             exit(ok ? 0 : 1)
         }
 
+        // 自检：粘贴不支持的文件类型，**绝不许进预览框**（--pastetypetest）
+        // 用户 2026-10-29 第 6 轮第 3 条报的致命 bug：
+        // tiff / heic / gif 这些 NSImage 认得、但白名单里没有的格式，
+        // 会先被 `UploadItem(url:)` 拒掉，然后又被 `NSImage(pasteboard:)` 解成图片塞进框里。
+        // 这里用一块**私有剪贴板**复现，不动用户自己的剪贴板。
+        if CommandLine.arguments.contains("--pastetypetest") {
+            let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("paste-type-test-\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: dir) }
+
+            let base = AppState.demoImages(1)[0]
+            let bitmap = NSBitmapImageRep(data: base.tiffRepresentation!)!
+
+            func write(_ type: NSBitmapImageRep.FileType, _ name: String) -> URL {
+                let url = dir.appendingPathComponent(name)
+                if let data = bitmap.representation(using: type, properties: [:]) {
+                    try? data.write(to: url)
+                }
+                return url
+            }
+            let tiff = write(.tiff, "卷子.tiff")     // 不支持：NSImage 认，白名单不认
+            let png  = write(.png,  "卷子.png")      // 支持
+
+            func run(_ urls: [URL]) -> (count: Int, names: [String], toast: String?) {
+                let app = AppState()
+                let pb = NSPasteboard(name: .init("exam-paste-test-\(UUID().uuidString)"))
+                pb.clearContents()
+                pb.writeObjects(urls.map { $0 as NSURL })
+                app.paste(from: pb, into: .paper)
+                return (app.items(for: .paper).count,
+                        app.items(for: .paper).map(\.name),
+                        app.toast)
+            }
+
+            let bad = run([tiff])
+            let good = run([png])
+
+            var lines: [String] = []
+            lines.append("粘 .tiff → 框里 \(bad.count) 个（应为 0）  文件：\(bad.names)")
+            lines.append("          提示：\(bad.toast ?? "无")")
+            lines.append("粘 .png  → 框里 \(good.count) 个（应为 1）  文件：\(good.names)")
+            FileHandle.standardError.write(Data((lines.joined(separator: "\n") + "\n").utf8))
+
+            let ok = bad.count == 0 && good.count == 1
+            exit(ok ? 0 : 1)
+        }
+
 
         // 自检：提示词拼装（--prompttest）——不用真跑一遍也能看 AI 收到什么
         if CommandLine.arguments.contains("--prompttest") {
@@ -293,9 +341,10 @@ struct WindowCloseAccessor: NSViewRepresentable {
                 // 标题栏只留红绿灯，不显示“试卷识别”几个字（和界面内大标题重复）。
                 // 只隐藏标题栏文字，不改窗口本身的标题，Dock 菜单里的窗口名还在。
                 window.titleVisibility = .hidden
-                // 标题栏下面那条分隔线**常驻**（用户 2026-10-29 第 3 轮第 2 条）：
-                // 系统默认是 `.automatic`，只有滚动/悬停时才画出来，鼠标一走就消失，看着像在闪。
-                window.titlebarSeparatorStyle = .line
+                // 系统的分割线在这套「隐藏标题 + 透明标题栏」的窗口上压不住（只 hover 才出现），
+                // 所以界面里自己画了一条常驻的（见 ContentView 顶部的 overlay）。
+                // 这里把系统的关掉，免得上下一共两条线。
+                window.titlebarSeparatorStyle = .none
             }
         }
         return view
@@ -305,7 +354,7 @@ struct WindowCloseAccessor: NSViewRepresentable {
             if let window = nsView.window {
                 window.delegate = ExitConfirmWindowDelegate.shared
                 window.titleVisibility = .hidden
-                window.titlebarSeparatorStyle = .line
+                window.titlebarSeparatorStyle = .none
             }
         }
     }
@@ -407,6 +456,19 @@ struct ContentView: View {
             }
         }
         .frame(width: 620, height: 720)
+        // 标题栏（红绿灯那条）下面的分割线 —— **自己画一条，常驻**（用户 2026-10-29 第 6 轮第 1 条）。
+        //
+        // 为什么不用系统的 `titlebarSeparatorStyle = .line`：那个属性在本窗口上不生效。
+        // 窗口为了只留红绿灯，把 `titleVisibility` 设成了 `.hidden`，
+        // 这种「标题栏透明、内容顶到窗口顶部」的形态下，系统只在滚动/鼠标悬停时才画那条线
+        // （`.automatic` 的表现），`.line` 也压不住。与其跟系统猜，不如自己画一条 1px 的，
+        // 位置正好在内容区最顶端 = 标题栏底边，颜色用系统的 `.separatorColor`，明暗自适应。
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(height: 1)
+                .allowsHitTesting(false)
+        }
         .background(WindowCloseAccessor())
         .onAppear {
             state.startPolling()
@@ -1047,10 +1109,10 @@ struct UploadCard: View {
             separator
             previewArea
         }
-        // 左右内边距 15 → 12（用户 2026-10-29 第 5 轮第 5 条）：
+        // 左右内边距 15 → 12 → **10**（用户 2026-10-29 第 5、6 轮）：
         // 这就是他说的「总框内部那个看不见的总右边距」。改小之后预览区整体右移，
         // 自绘滚动条也跟着往右挪、离卡片边框更近，左边就腾出位置给格子了。
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 10)
         .padding(.vertical, 13)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -1157,8 +1219,10 @@ struct UploadCard: View {
                     Spacer(minLength: 8)
                     // 右上角的「清空」：有文件、且没在跑的时候才出现。
                     // 跑的时候不给清，免得半路把附件从对话框里抽走。
+                    // 卡片内边距 12→10 之后右边框往右移了 2pt，这里补 2pt 右边距，
+                    // 让按钮看上去还停在原来的位置（用户 2026-10-29 第 6 轮第 2 条）。
                     if filled && !state.isRunning {
-                        clearAllButton
+                        clearAllButton.padding(.trailing, 2)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1345,7 +1409,7 @@ struct UploadCard: View {
             let y = min(max(scrollOffset, 0), maxOffset) / maxOffset * travel
 
             Capsule()
-                .fill(Color.secondary.opacity(0.34))
+                .fill(Color.secondary.opacity(0.45))
                 .frame(width: scrollBarWidth, height: thumbH)
                 .offset(y: y)
                 .padding(.trailing, 1)
@@ -1354,11 +1418,11 @@ struct UploadCard: View {
     }
 
     /// 滚动条粗细 / 距框右边的留白。
-    /// 用户 2026-10-29 第 5 轮第 5 条：第一版 3pt、0.22 太细太淡，和左边格子几乎贴在一起。
-    /// 现在 5pt / 0.34，并且把格子的右侧让位从 5 加到 11 —— 格子宽度不变（仍是 541），
-    /// 但格子与滚动条之间空出约 5pt，一眼能看出「这里能滚」。
-    private let scrollBarWidth: CGFloat = 5
-    private let scrollBarGutter: CGFloat = 11
+    /// 用户 2026-10-29 第 6 轮第 2 条：3pt/0.22 → 5pt/0.34 → **6pt/0.45**。
+    /// 格子右侧让位 11 → 13，于是格子与滚动条之间空出 13-1-6 = **6pt**；
+    /// 卡片内边距缩到 10 之后，格子反而比上一版还宽 2pt（543）。
+    private let scrollBarWidth: CGFloat = 6
+    private let scrollBarGutter: CGFloat = 13
 
     /// 内容总高度：行数 × 格子高 + 行距 + 上下内边距。
     private var contentHeight: CGFloat {

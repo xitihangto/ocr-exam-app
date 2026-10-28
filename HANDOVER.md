@@ -242,9 +242,13 @@ ocr-exam-app/
 
 上传卡的当前常量（改高度后跑这两个工具复测）：
 - `tileHeight = 82`，`gridVPadding = 1` → `previewHeight = 82*2 + 8 + 1*2 = 174`
+- 卡片左右内边距 **10**；格子右侧让位 `scrollBarGutter = 13` → 格子宽 543（6 栏）
 - 行数：12 个以内恒 2 行；超过按 `ceil(n/6)` 加行，上限 8 行（48 张）；3 行及以上才出滚动条
+- 自绘滚动条：宽 **6**、`secondary.opacity(0.45)`、距右边 1pt，**overlay 不占布局**
+- 页面底部留白 **12**（22 时内容 722.5 > 窗口 720，整页会滚 2px）
 - 分隔线上下各 10pt；Word 卡底部到窗口底边 **19.5pt**（原 51.5pt 的 0.38 倍）
-- 窗口标题栏：`titlebarSeparatorStyle = .line`（常驻那条分割线，不然鼠标一走就消失）
+- 窗口标题栏：`titlebarSeparatorStyle = .none` + **界面自己画的 1px 常驻线**
+  （`.line` 在这套「隐藏标题 + 透明标题栏」的窗口上不生效，只在 hover 时出现）
 
 ---
 

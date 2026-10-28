@@ -1152,26 +1152,35 @@ final class AppState: ObservableObject {
     // MARK: - 粘贴
 
     /// ⌘V：从剪贴板往框里放文件或图片。
-    /// - 剪贴板里有多个文件 → 逐个放进去（批量试卷常常一次复制一堆图）
-    /// - 恰好一个文件 → 按扩展名收下
-    /// - 没有文件但有图（截图、网页里复制的图）→ 当作图片收下
+    /// - 剪贴板里有文件 → 逐个按扩展名收（批量试卷常常一次复制一堆图）
+    /// - 没有文件、但有图（截图、网页里复制的图）→ 当作图片收下
     /// 数量 / 种类超限同样拒绝，提示落在上传框的正中心。
+    ///
+    /// ⚠️ **剪贴板里一旦有文件 URL，就走完这个分支直接 return，绝不再往下试 `NSImage(pasteboard:)`**
+    /// （用户 2026-10-29 第 6 轮第 3 条报的致命 bug）：
+    /// `NSImage(pasteboard:)` 会把剪贴板上的**文件 URL 当成图片去解** ——
+    /// heic / tiff / gif 这些 NSImage 认得、但我们白名单里没有的格式，
+    /// 会先被 `UploadItem(url:)` 拒掉，然后又被这一句解成图片塞进预览框。
+    /// 结果就是「提示了类型不支持，文件却还是进来了」。
     func pasteFromClipboard(into slot: Slot) {
-        let pb = NSPasteboard.general
+        paste(from: .general, into: slot)
+    }
 
+    /// 真正干活的那一层。剪贴板作为参数传进来，自检（`--pastetypetest`）就能用一块私有剪贴板
+    /// 复现「粘一个不支持的文件」而不去动用户自己的剪贴板。
+    func paste(from pb: NSPasteboard, into slot: Slot) {
         let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
         let urls = (pb.readObjects(forClasses: [NSURL.self], options: options) as? [URL]) ?? []
 
         if !urls.isEmpty {
             var accepted = 0
             var duplicates = 0
+            var unsupported = 0
             var stopped = false
             for url in urls {
                 guard !stopped else { break }
                 guard let item = UploadItem(url: url) else {
-                    if urls.count == 1 {
-                        showToast("这个文件类型不支持，只收 png / jpg 图片或 PDF", slot: slot)
-                    }
+                    unsupported += 1        // 类型不在白名单，直接不收
                     continue
                 }
                 // 成功放进框里不弹提示 —— 卡片本身就是反馈，
@@ -1183,10 +1192,18 @@ final class AppState: ObservableObject {
                 case .rejected:  stopped = true      // addUpload 已经冒过泡，后面的不再试
                 }
             }
-            if duplicates > 0 && !stopped {
-                showToast(duplicateToast(duplicates), slot: slot)
+            // 提示优先级：超限/混放（addUpload 已经冒过泡）> 重复 > 类型不支持
+            if !stopped {
+                if duplicates > 0 && unsupported > 0 {
+                    showToast("有 \(duplicates) 个已经在框里了、\(unsupported) 个类型不支持，已跳过", slot: slot)
+                } else if duplicates > 0 {
+                    showToast(duplicateToast(duplicates), slot: slot)
+                } else if unsupported > 0 {
+                    showToast("这个文件类型不支持，只收 png / jpg 图片或 PDF", slot: slot)
+                }
             }
-            if accepted > 0 || duplicates > 0 || stopped { return }
+            // 不管收下几个，**文件分支到此为止**，绝不落到下面的图片分支
+            return
         }
         if let image = NSImage(pasteboard: pb) {
             let item = UploadItem(image: image, name: nextPasteName())
