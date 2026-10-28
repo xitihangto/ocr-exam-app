@@ -547,7 +547,7 @@ final class AppState: ObservableObject {
 
     var modeStatusText: String? {
         guard login.isLoggedIn else { return nil }
-        if modesChecked { return "深度思考、智能搜索已关闭" }
+        if modesChecked { return "深度思考、智能搜索已激活" }
         if modesCheckInFlight { return "正在检查深度思考、智能搜索…" }
         return modeCheckDetail
     }
@@ -577,13 +577,13 @@ final class AppState: ObservableObject {
                 detail: "请先登录 DeepSeek 账号，登录成功后即可开始识别。",
                 fraction: 0.72)
         }
-        // 登录后确认深度思考/智能搜索确实是关着的（转录不需要它们，开着纯烧时间）
+        // 登录后把深度思考/智能搜索状态拼进标题
         var title = "准备就绪（\(kindText)）"
-        var stillOn: [String] = []
-        if deepThinkOn { stillOn.append("深度思考") }
-        if smartSearchOn { stillOn.append("智能搜索") }
-        if !stillOn.isEmpty {
-            title += "　\(stillOn.joined(separator: "、")) 还开着"
+        var modes: [String] = []
+        if deepThinkOn { modes.append("深度思考") }
+        if smartSearchOn { modes.append("智能搜索") }
+        if !modes.isEmpty {
+            title += "　\(modes.joined(separator: "、")) 已激活"
         }
         return IdleStatus(
             title: title,
@@ -707,12 +707,11 @@ final class AppState: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: item)
     }
 
-    /// 登录成功后，确保深度思考 + 智能搜索都是**关闭**的。
+    /// 登录成功后，确保深度思考 + 智能搜索都已开启（三个 app 统一这个行为）。
     ///
-    /// 为什么要关（2026-10-29 实测）：一轮识别 101 秒，其中 90 秒在等 DeepSeek 出字。
-    /// 这两个开关会让模型先想一大段、再联网搜一遍，对「照规则逐字转录」纯属浪费。
-    /// 用户要求：发现开着就强行点掉；关掉之后保持关闭（DeepSeek 自己会记住这个偏好），
-    /// 除非使用者手动再打开。
+    /// 2026-10-29 试过反过来强行关闭，实测**更慢**：关掉后单次输出上限变小，
+    /// 一份卷子被切成 4 段、要点 4 次「继续」，总耗时 125 秒；开着时一次写完，101 秒。
+    /// 用户拍板：还是开着，和文章批改 / 讲义保持一致。
     private func ensureDeepSeekModes() {
         guard !modesChecked, !modesCheckInFlight else { return }
         modesCheckInFlight = true
@@ -738,18 +737,18 @@ final class AppState: ObservableObject {
                 print("[DEBUG] deepThink=\(dt), smartSearch=\(ss)")
                 var requested: [String] = []
 
-                if dt, let (x, y) = Self.modeRect(obj["deepThinkRect"]) {
-                    print("[DEBUG] 关闭深度思考: (\(x), \(y))")
+                if !dt, let (x, y) = Self.modeRect(obj["deepThinkRect"]) {
+                    print("[DEBUG] 打开深度思考: (\(x), \(y))")
                     if self.clickBrowserMode(at: x, y: y) { requested.append("深度思考") }
                 } else {
-                    if dt { print("[DEBUG] 深度思考还开着，但找不到坐标") }
+                    if !dt { print("[DEBUG] 深度思考未开启且找不到坐标") }
                 }
 
-                if ss, let (x, y) = Self.modeRect(obj["smartSearchRect"]) {
-                    print("[DEBUG] 关闭智能搜索: (\(x), \(y))")
+                if !ss, let (x, y) = Self.modeRect(obj["smartSearchRect"]) {
+                    print("[DEBUG] 打开智能搜索: (\(x), \(y))")
                     if self.clickBrowserMode(at: x, y: y) { requested.append("智能搜索") }
                 } else {
-                    if ss { print("[DEBUG] 智能搜索还开着，但找不到坐标") }
+                    if !ss { print("[DEBUG] 智能搜索未开启且找不到坐标") }
                 }
 
                 // 不能把“已发出点击”当作“已开启”：等页面处理事件后重新探测确认。
@@ -771,14 +770,14 @@ final class AppState: ObservableObject {
                 self.modesCheckInFlight = false
                 self.deepThinkOn = finalDeepThink
                 self.smartSearchOn = finalSmartSearch
-                self.modesChecked = !finalDeepThink && !finalSmartSearch
+                self.modesChecked = finalDeepThink && finalSmartSearch
                 // 第二个绿灯就在这里亮起来 —— 立刻开始算「登出」按钮那 0.5 秒延迟。
                 // 不能等下一轮登录探针（2 秒后）再算，那样按钮要 2.5 秒才出现。
                 self.syncLogoutGate()
                 if self.modesChecked {
                     // 登录流程结束后进度卡会回到 idleStatus；由它统一显示“已关闭”，
                     // 不留一条成功提示遮住空闲状态框。
-                    print("[DEBUG] 深度思考、智能搜索均已关闭")
+                    print("[DEBUG] 深度思考、智能搜索均已激活")
                 } else if let errorDescription {
                     // 5 秒内不出“重试”字样，只说在等页面；5 秒后仍失败，才说重试。
                     self.modeCheckDetail = self.modesRetryAllowed ? "模式检查暂时失败，正在重试" : "正在等待页面加载"
@@ -787,9 +786,9 @@ final class AppState: ObservableObject {
                     if !deepThinkFound || !smartSearchFound {
                         self.modeCheckDetail = "未识别到模式开关，正在等待页面加载"
                     } else {
-                        self.modeCheckDetail = self.modesRetryAllowed ? "模式尚未确认关闭，正在重试" : "模式尚未确认关闭，正在等待页面加载"
+                        self.modeCheckDetail = self.modesRetryAllowed ? "模式尚未确认开启，正在重试" : "模式尚未确认开启，正在等待页面加载"
                     }
-                    print("[DEBUG] 开关尚未全部关闭，将在下一次登录探针时重试")
+                    print("[DEBUG] 开关尚未全部就绪，将在下一次登录探针时重试")
                 }
             }
         }
