@@ -547,8 +547,8 @@ final class AppState: ObservableObject {
 
     var modeStatusText: String? {
         guard login.isLoggedIn else { return nil }
-        if modesChecked { return "深度思考、联网搜索已关闭" }
-        if modesCheckInFlight { return "正在检查深度思考、联网搜索…" }
+        if modesChecked { return "深度思考、智能搜索已关闭" }
+        if modesCheckInFlight { return "正在检查深度思考、智能搜索…" }
         return modeCheckDetail
     }
 
@@ -716,7 +716,7 @@ final class AppState: ObservableObject {
     private func ensureDeepSeekModes() {
         guard !modesChecked, !modesCheckInFlight else { return }
         modesCheckInFlight = true
-        modeCheckDetail = "正在检查深度思考、联网搜索…"
+        modeCheckDetail = "正在检查深度思考、智能搜索…"
         print("[DEBUG] ensureDeepSeekModes: 开始探测")
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self = self else { return }
