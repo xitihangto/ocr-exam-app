@@ -423,6 +423,18 @@ final class AppState: ObservableObject {
         return f
     }()
 
+    /// 运行日志落盘的位置：`~/Library/Logs/试卷识别/运行日志.log`
+    ///
+    /// 面板里的文字选中不了、也复制不出来，出了问题没法贴给别人看。
+    /// 每轮开跑时被覆盖，所以文件里永远是**最近一轮**的完整日志。
+    static var logFileURL: URL? {
+        guard let lib = FileManager.default.urls(for: .libraryDirectory,
+                                                 in: .userDomainMask).first else { return nil }
+        let dir = lib.appendingPathComponent("Logs/试卷识别", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("运行日志.log")
+    }
+
     func log(_ line: String) {
         if Thread.isMainThread {
             let now = Date()
@@ -433,6 +445,9 @@ final class AppState: ObservableObject {
             lastLogAt = now
             progressLines.append("\(prefix) \(line)")
             if progressLines.count > 400 { progressLines.removeFirst(200) }
+            if let url = Self.logFileURL {
+                try? progressLines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+            }
         } else {
             DispatchQueue.main.async { self.log(line) }
         }
