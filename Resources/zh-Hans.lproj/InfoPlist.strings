@@ -1,0 +1,5 @@
+/* Dock 悬停气泡、菜单栏最左边那个菜单名、访达「显示简介」里的名称，都读这里。
+   注意：Info.plist 里的 CFBundleName 会被本文件覆盖（因为包里声明了 zh-Hans 本地化），
+   所以改 Info.plist 没用，必须改这里。 */
+"CFBundleName" = "试卷识别";
+"CFBundleDisplayName" = "试卷识别";

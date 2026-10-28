@@ -1,0 +1,10 @@
+.DS_Store
+dist/
+*.app
+tmp/
+.extract-cache/
+*.log
+
+# agent 的工作笔记（项目记忆 MEMORY.md、当日改动日志）—— 属于协作过程，不是工程源码。
+# 注意：它在 v0.3 基线提交里已经进过历史，这里只是让它以后不再被跟踪，历史不会因此消失。
+.workbuddy-ai/
