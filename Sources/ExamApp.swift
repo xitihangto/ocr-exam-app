@@ -99,6 +99,53 @@ struct ExamApp: App {
             exit(exists ? 0 : 1)
         }
 
+        // 自检：批量建卡片的耗时（--batchperftest）
+        // 用户 2026-10-29 第 8 轮报「10 个文件以上很卡」。这里造 12 张 2400×3200 的 JPEG
+        // （接近手机拍照 / 扫描件的量级），量一量现在把 12 个 URL 变成预览卡片要多久。
+        if CommandLine.arguments.contains("--batchperftest") {
+            let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("batch-perf-\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: dir) }
+
+            let w = 2400, h = 3200
+            var urls: [URL] = []
+            for i in 0..<12 {
+                guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
+                                          bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+                else { continue }
+                // 白底 + 若干横线 + 随编号变化的灰块，保证 12 张内容各不相同（不会被判重拦掉）
+                ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+                ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+                ctx.setFillColor(CGColor(gray: 0.35 + Double(i) * 0.02, alpha: 1))
+                for row in 0..<40 {
+                    ctx.fill(CGRect(x: 200, y: h - 300 - row * 70,
+                                    width: w - 400 - (row % 5) * 60, height: 12))
+                }
+                guard let cg = ctx.makeImage() else { continue }
+                let url = dir.appendingPathComponent("page-\(i + 1).jpg")
+                if let data = NSBitmapImageRep(cgImage: cg)
+                    .representation(using: .jpeg, properties: [.compressionFactor: 0.8]) {
+                    try? data.write(to: url)
+                    urls.append(url)
+                }
+            }
+
+            let t0 = Date()
+            let built = AppState.buildItems(from: urls)
+            let dt = Date().timeIntervalSince(t0)
+            let bytes = urls.compactMap {
+                (try? FileManager.default.attributesOfItem(atPath: $0.path))?[.size] as? Int
+            }.reduce(0, +)
+            let line = String(format:
+                "%d 张 %dx%d JPEG（共 %.1f MB）：建卡片 %.0f ms，平均 %.1f ms/张；认不出 %d 个\n",
+                urls.count, w, h, Double(bytes) / 1024 / 1024,
+                dt * 1000, dt * 1000 / Double(max(urls.count, 1)), built.unsupported)
+            FileHandle.standardError.write(Data(line.utf8))
+            exit(urls.count == 12 && built.items.count == 12 ? 0 : 1)
+        }
+
         // 自检：重复文件判定（--dedupetest）
         // 用户 2026-10-29 第 4 轮第 3 条：内容一样的文件不许重复放进框里，
         // 而且**只能丢掉新来的那份，框里原来那个必须留着**。
@@ -152,6 +199,9 @@ struct ExamApp: App {
         // 会先被 `UploadItem(url:)` 拒掉，然后又被 `NSImage(pasteboard:)` 解成图片塞进框里。
         // 这里用一块**私有剪贴板**复现，不动用户自己的剪贴板。
         if CommandLine.arguments.contains("--pastetypetest") {
+            // 建卡片默认在后台线程做（见 AppState.acceptBatch）；自检要同步读到结果，
+            // 这里把它拉回主线程。
+            AppState.loadFilesOnMainThread = true
             let dir = URL(fileURLWithPath: NSTemporaryDirectory())
                 .appendingPathComponent("paste-type-test-\(UUID().uuidString)")
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
