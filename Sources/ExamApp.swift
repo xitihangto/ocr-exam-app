@@ -90,6 +90,12 @@ struct ExamApp: App {
             exit(0)
         }
 
+        // 自检：base64 分片注入到底多慢（--feedperftest）
+        if CommandLine.arguments.contains("--feedperftest") {
+            FeedPerfTest.run()
+            exit(0)
+        }
+
         // 自检：剪贴板图片落盘（--pastetest）
         if CommandLine.arguments.contains("--pastetest") {
             let image = AppState.demoImages(1)[0]
