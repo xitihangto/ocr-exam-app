@@ -333,8 +333,11 @@ enum Scripts {
         var clean=ls.join('\n').replace(/\s+$/,'');
         out.codeTail=clean.slice(-90);
 
-        // 【最强信号】AI 按提示词要求在最后一行打的结束标记
-        out.hasEndMark=/#\s*===ESSAY-END===/i.test(clean.slice(-300));
+        // 【最强信号】AI 按提示词要求在最后一行打的结束标记。
+        // ⚠️ 这里是 EXAM-END，不是作文版的 ESSAY-END ——
+        // 本工程是从作文版克隆的，这一行当初漏改，导致标记永远匹配不上，
+        // 判定只能退回 save / main 两个弱信号（用户 2026-10-29 复查提示词时发现）。
+        out.hasEndMark=/#\s*===EXAM-END===/i.test(clean.slice(-300));
 
         // 收尾标志一：末尾出现 .save(...) 调用（规则要求最后 doc.save，实测 AI 常写 b.save(OUT_NAME)）
         // 括号必须闭合，否则「b.save(OUT_NA」这种写了一半的也会算进来
