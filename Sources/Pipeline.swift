@@ -530,6 +530,18 @@ extension AppState {
             if hasContinue {
                 stableRounds = 0
 
+                // ⚠️ 2026-10-29 实测踩到的坑：文字还在长，说明其实正在生成，
+                // 但「继续生成」按钮可能仍挂在 DOM 上（停止按钮是纯图标，generating 认不出来），
+                // 这时点下去会落到同一位置的「停止」上，把刚恢复的生成掐死。
+                // 日志证据：点完继续 1.6 秒后又点了一次 → 之后 24 秒一个字没涨 → 失败。
+                // 所以：最近 4 秒内还在涨字，就绝不点，老老实实等它写完。
+                if Date().timeIntervalSince(lastChangeAt) < 4.0 {
+                    lastTextLen = textLen
+                    lastCodeLen = codeLen
+                    Thread.sleep(forTimeInterval: 1.0)
+                    continue
+                }
+
                 if clicksIneffective >= 2 {
                     throw BridgeError.failed(
                         "AI 停下来之后没有继续写。可能到了长度上限，请再试一次。")
