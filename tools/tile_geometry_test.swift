@@ -2,7 +2,7 @@
 //
 //   swift tools/tile_geometry_test.swift
 //
-// 干什么：用 `ImageRenderer` 在离屏画布上按真实宽度（546pt，卡片内容区）渲染
+// 干什么：用 `ImageRenderer` 在离屏画布上按真实宽度（552pt，卡片内容区；再减掉右侧 11pt 滚动条让位）渲染
 // 「6 栏 LazyVGrid + 横向大图缩略图」，然后沿中线扫像素，数一行里有多少个独立的格子、每个多宽。
 //
 // 为什么要有：用户 2026-10-29 报「横向图片贴进去会超出边界、与其他预览框大幅度重叠」。
@@ -55,7 +55,7 @@ struct NewTile: View {
 }
 
 @MainActor func measure<V: View>(_ v: V, _ label: String) {
-    // 541 = 卡片内容区 546 - 右侧给滚动条留的 5（scrollBarGutter）
+    // 541 = 卡片内容区 552 - 右侧给滚动条让的 11（scrollBarGutter）
     let r = ImageRenderer(content: v.frame(width: 541))
     r.scale = 1
     guard let img = r.nsImage,
@@ -117,7 +117,7 @@ MainActor.assumeIsolated {
         ForEach(0..<12) { _ in EmptySlot() }
     }
     .padding(.vertical, gridVPadding)
-    .frame(width: 541)          // 卡片内容区 546 - 右侧给滚动条留的 5（scrollBarGutter）
+    .frame(width: 541)          // 卡片内容区 552 - 右侧给滚动条让的 11（scrollBarGutter）
 
     let r = ImageRenderer(content: grid)
     r.scale = 1

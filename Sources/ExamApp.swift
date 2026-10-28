@@ -398,7 +398,12 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 22)
                 .padding(.top, 18)
-                .padding(.bottom, 22)
+                // 底部留白 **22 → 12**（用户 2026-10-29 第 5 轮第 2 条：整页会滚 2px）。
+                // 实测卡片下边缘在 700.5pt，加 22 的底部留白 = 内容 722.5pt > 窗口 720pt，
+                // 于是整页永远可滚 2.5px（就是「滚 2 像素」那个后遗症）。
+                // 关键点：卡片位置只由「上留白 + 上方内容」决定，**改下留白不会移动卡片**，
+                // 所以卡片到窗口底边的可见留白一点没变，只是把多出来的 10pt 让掉了。
+                .padding(.bottom, 12)
             }
         }
         .frame(width: 620, height: 720)
@@ -1042,7 +1047,10 @@ struct UploadCard: View {
             separator
             previewArea
         }
-        .padding(.horizontal, 15)
+        // 左右内边距 15 → 12（用户 2026-10-29 第 5 轮第 5 条）：
+        // 这就是他说的「总框内部那个看不见的总右边距」。改小之后预览区整体右移，
+        // 自绘滚动条也跟着往右挪、离卡片边框更近，左边就腾出位置给格子了。
+        .padding(.horizontal, 12)
         .padding(.vertical, 13)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -1125,8 +1133,13 @@ struct UploadCard: View {
 
     /// 用户 2026-10-29 要求：加号不再是单独一行，改成 flex —— 左边一个加号方块，
     /// 右边两行文案。这样第一行不再被 46pt 高的加号撑着，纵向省下一整行。
+    /// 加号方块的边长、加号与文案区的间距。
+    /// 单独拎出来是因为「紫色提示要相对整框居中」要用到它俩算补偿量（见 headerRow）。
+    private let plusSide: CGFloat = 46
+    private let headerGap: CGFloat = 10
+
     private var headerRow: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .center, spacing: headerGap) {
             plusButton
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
@@ -1149,6 +1162,23 @@ struct UploadCard: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                // 等待粘贴时的紫色提示（用户 2026-10-29 第 4 轮第 1 条）：
+                // **纵向**要跟「上传试卷」这行字居中，所以挂在**第一行**自己身上（不是整行）；
+                // **横向**要相对整框居中，所以再往左补偿半个「加号 + 间距」的宽度 ——
+                // 文案区左边被加号顶掉了 plusSide + headerGap，它的中心比卡片中心偏右
+                // 半个这个宽度，补回来正好落在卡片正中。
+                .overlay(alignment: .center) {
+                    if armed {
+                        Text("按 ⌘V 或者右键粘贴，点框外取消")
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(Color.brandAccent)
+                            .lineLimit(1)
+                            .fixedSize()
+                            .offset(x: -(plusSide + headerGap) / 2)
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
+                    }
+                }
                 // 第二行恒定是「支持哪些格式 + 数量上限」，激活粘贴时也不改写。
                 // 窄窗口下按 0.9 缩一点，宁可小一号也不要截断成「…图片最多…」。
                 Text(subtitle + limitText)
@@ -1159,21 +1189,6 @@ struct UploadCard: View {
                     .truncationMode(.tail)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        // 等待粘贴时的紫色提示（用户 2026-10-29 第 2 轮第 1 条）：
-        // 居中基准改成**整张卡片**（挂在包含加号的这一整行上，不再是右边那块文案区）。
-        // 卡片左右内边距对称，所以这一行的中心就是卡片的水平中心。
-        // 只显示、不吃点击，免得挡住框自己的 tap。
-        .overlay(alignment: .center) {
-            if armed {
-                Text("按 ⌘V 或者右键粘贴，点框外取消")
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(Color.brandAccent)
-                    .lineLimit(1)
-                    .fixedSize()
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
-            }
         }
     }
 
@@ -1217,6 +1232,9 @@ struct UploadCard: View {
     /// SwiftUI 没有内阴影，这里用「一圈描边 + 模糊 + 裁进圆角」模拟：
     /// 描边往里晕开一点点，看起来就是边缘压暗的内阴影。
     /// 两层叠色（默认 / hover）都用 `opacity` 切换，不换颜色值，避免 hover 时重新合成闪烁。
+    ///
+    /// 用户 2026-10-29 第 5 轮第 4 条：阴影太明显 —— 浓度下调、扩散距离（blur / radius / 位移）
+    /// 也一起收小，只留一层「薄薄的玻璃厚度」，不再有脏脏的一圈灰。
     private var clearButtonGlass: some View {
         let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
         return ZStack {
@@ -1227,22 +1245,22 @@ struct UploadCard: View {
             // hover：淡红底
             shape.fill(Color.brandRed.opacity(0.13))
                 .opacity(clearHover ? 1 : 0)
-            // 内阴影
-            shape.strokeBorder(Color.black.opacity(clearHover ? 0.20 : 0.15), lineWidth: 1.6)
-                .blur(radius: 1.3)
+            // 内阴影：描边细一点、模糊小一点、浓度降一半
+            shape.strokeBorder(Color.black.opacity(clearHover ? 0.11 : 0.08), lineWidth: 1.0)
+                .blur(radius: 0.7)
                 .clipShape(shape)
             // 上沿高光（玻璃感）
             shape.strokeBorder(
-                LinearGradient(colors: [Color.white.opacity(0.80), Color.white.opacity(0.04)],
+                LinearGradient(colors: [Color.white.opacity(0.70), Color.white.opacity(0.03)],
                                startPoint: .top, endPoint: .bottom),
-                lineWidth: 0.9)
+                lineWidth: 0.8)
             // 外描边
-            shape.strokeBorder(Color.black.opacity(0.09), lineWidth: 0.6)
+            shape.strokeBorder(Color.black.opacity(0.07), lineWidth: 0.5)
         }
         .compositingGroup()
-        // 外阴影
-        .shadow(color: .black.opacity(0.11), radius: 1.8, y: 1)
-        .shadow(color: .black.opacity(0.05), radius: 0.5, y: 0.3)
+        // 外阴影：更淡、更近
+        .shadow(color: .black.opacity(0.06), radius: 0.9, y: 0.5)
+        .shadow(color: .black.opacity(0.03), radius: 0.3, y: 0.2)
     }
 
     /// 加号/文案 与 下方预览区 之间的分隔线（用户 2026-10-29 第 3 条）：
@@ -1327,7 +1345,7 @@ struct UploadCard: View {
             let y = min(max(scrollOffset, 0), maxOffset) / maxOffset * travel
 
             Capsule()
-                .fill(Color.secondary.opacity(0.22))
+                .fill(Color.secondary.opacity(0.34))
                 .frame(width: scrollBarWidth, height: thumbH)
                 .offset(y: y)
                 .padding(.trailing, 1)
@@ -1336,9 +1354,11 @@ struct UploadCard: View {
     }
 
     /// 滚动条粗细 / 距框右边的留白。
-    /// `scrollBarGutter` 是给格子留的那点空隙，**恒定不变** —— 不管有没有滚动条。
-    private let scrollBarWidth: CGFloat = 3
-    private let scrollBarGutter: CGFloat = 5
+    /// 用户 2026-10-29 第 5 轮第 5 条：第一版 3pt、0.22 太细太淡，和左边格子几乎贴在一起。
+    /// 现在 5pt / 0.34，并且把格子的右侧让位从 5 加到 11 —— 格子宽度不变（仍是 541），
+    /// 但格子与滚动条之间空出约 5pt，一眼能看出「这里能滚」。
+    private let scrollBarWidth: CGFloat = 5
+    private let scrollBarGutter: CGFloat = 11
 
     /// 内容总高度：行数 × 格子高 + 行距 + 上下内边距。
     private var contentHeight: CGFloat {
@@ -1390,7 +1410,7 @@ struct UploadCard: View {
             Image(systemName: "plus")
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(Color.brandAccent.opacity(plusHover ? 1 : 0.8))
-                .frame(width: 46, height: 46)
+                .frame(width: plusSide, height: plusSide)
                 .background(
                     RoundedRectangle(cornerRadius: 11, style: .continuous)
                         .fill(Color.brandAccent.opacity(plusHover ? 0.13 : 0.06))
