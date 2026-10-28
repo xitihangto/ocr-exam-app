@@ -1082,7 +1082,9 @@ struct UploadCard: View {
     }
 
     /// 每个格子的高度。两行 + 行距 = 预览区高度。
-    private let tileHeight: CGFloat = 72
+    /// 用户 2026-10-29：整框再增高，让「Word 试卷卡底部 → 窗口底边」的间距缩到原来的 0.4 倍。
+    /// 实测原来 51.5pt，目标 ~20.6pt，所以格子从 72 抬到 87（两行共 +30pt）。
+    private let tileHeight: CGFloat = 87
     private var previewHeight: CGFloat { tileHeight * 2 + 8 }
 
     private var plusButton: some View {
