@@ -652,33 +652,58 @@ extension AppState {
 
     /// 点「继续生成」
     /// 内置浏览器走真实 NSEvent 注入（isTrusted = true），Safari 只能走 JS。
+    ///
+    /// 2026-10-29 加了两道保险（用户实测：手点 0.1–0.2 秒就继续、按钮瞬间消失）：
+    /// ① 坐标只在按钮**已经在视口内**时才取，需要滚动就先返回 SCROLLING 等滚完再取；
+    /// ② 点之前做 `elementFromPoint` 命中测试，命中元素不是按钮就绝不下手。
     private func clickContinueButton() throws -> String {
-        let raw = try self.js(Scripts.locateContinue)
+        var lastRaw = "NOT_TRIED"
 
-        if raw == "NOT_FOUND" { return "NOT_FOUND" }
-        if raw == "ZERO_SIZE" { return "ZERO_SIZE" }
+        for attempt in 0..<4 {
+            let raw = try self.js(Scripts.locateContinue)
+            lastRaw = raw
 
-        guard let data = raw.data(using: .utf8),
-              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let x = obj["x"] as? Double,
-              let y = obj["y"] as? Double else {
-            return "BAD_LOCATE:\(raw.prefix(60))"
-        }
-
-        if engine == .webview {
-            var ok = false
-            DispatchQueue.main.sync {
-                ok = self.browser.clickAtViewportPoint(x: CGFloat(x), y: CGFloat(y))
+            // 页面刚滚动过，坐标还不作数 —— 等它停稳再取一次
+            if raw == "SCROLLING" {
+                log("「继续」按钮不在视口内，滚动后重新取坐标（\(attempt + 1)/4）")
+                Thread.sleep(forTimeInterval: 0.45)
+                continue
             }
-            if ok {
-                return String(format: "REAL_MOUSE(%.0f,%.0f)", x, y)
+
+            // 按钮被别的东西盖住 / 正在淡出 —— 等一下再看，不算一次失败
+            if raw.hasPrefix("NOT_HIT") {
+                log("「继续」按钮命中测试未通过（\(raw)），\(attempt < 3 ? "稍后重试" : "放弃")")
+                if attempt < 3 { Thread.sleep(forTimeInterval: 0.5) }
+                continue
             }
+
+            if raw == "NOT_FOUND" { return "NOT_FOUND" }
+            if raw == "ZERO_SIZE" { return "ZERO_SIZE" }
+
+            guard let data = raw.data(using: .utf8),
+                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let x = obj["x"] as? Double,
+                  let y = obj["y"] as? Double else {
+                return "BAD_LOCATE:\(raw.prefix(60))"
+            }
+
+            if engine == .webview {
+                var ok = false
+                DispatchQueue.main.sync {
+                    ok = self.browser.clickAtViewportPoint(x: CGFloat(x), y: CGFloat(y))
+                }
+                if ok {
+                    return String(format: "REAL_MOUSE(%.0f,%.0f)", x, y)
+                }
+                let js = try self.js(Scripts.clickContinue)
+                return "FALLBACK_JS:\(js.prefix(80))"
+            }
+
             let js = try self.js(Scripts.clickContinue)
-            return "FALLBACK_JS:\(js.prefix(80))"
+            return "SAFARI_JS:\(js.prefix(120))"
         }
 
-        let js = try self.js(Scripts.clickContinue)
-        return "SAFARI_JS:\(js.prefix(120))"
+        return "LOCATE_UNSTABLE:\(lastRaw.prefix(60))"
     }
 
     /// 把页面上的代码块取回来，挑出最像「生成试卷」的那段

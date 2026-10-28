@@ -514,15 +514,37 @@ enum Scripts {
         return b.getBoundingClientRect().top - a.getBoundingClientRect().top;
       });
       var el=cands[0];
-      try{ el.scrollIntoView({block:'center',behavior:'instant'}); }
-      catch(e){ try{ el.scrollIntoView(); }catch(e2){} }
+      var vw=window.innerWidth, vh=window.innerHeight;
       var r=el.getBoundingClientRect();
       if(r.width<2||r.height<2) return 'ZERO_SIZE';
+
+      // ① 只有真的看不见才滚动。
+      //    原来无条件 scrollIntoView({behavior:'instant'})，而 'instant' 不是标准值
+      //    （标准只有 'auto' / 'smooth'），WebKit 会退回平滑滚动 —— 下一行立刻取的 rect
+      //    还是滚动前的旧坐标，点下去就落到别处。这就是「第 3 次点空」最可能的原因。
+      //    现在：在视口里就不滚；要滚就返回 SCROLLING，让 Swift 等滚动停下再取一次。
+      var fullyVisible = r.top>=2 && r.bottom<=vh-2 && r.left>=0 && r.right<=vw;
+      if(!fullyVisible){
+        try{ el.scrollIntoView({block:'center',behavior:'auto'}); }
+        catch(e){ try{ el.scrollIntoView(); }catch(e2){} }
+        return 'SCROLLING';
+      }
+
+      // ② 命中测试：这个点上最顶层的元素必须就是按钮本身或它的子孙。
+      //    防的是「按钮正在淡出 / 被浮层盖住 / 坐标过期」，这时点下去会点到别的东西。
+      var cx=r.left+r.width/2, cy=r.top+r.height/2;
+      var hit=document.elementFromPoint(cx,cy);
+      if(!hit) return 'NOT_HIT:none';
+      if(!(hit===el||el.contains(hit))){
+        var d=(hit.tagName||'?')+':'+((hit.innerText||'').replace(/\s+/g,'').slice(0,8));
+        return 'NOT_HIT:'+d;
+      }
+
       return JSON.stringify({
-        x:Math.round((r.left+r.width/2)*10)/10,
-        y:Math.round((r.top+r.height/2)*10)/10,
+        x:Math.round(cx*10)/10,
+        y:Math.round(cy*10)/10,
         w:Math.round(r.width), h:Math.round(r.height),
-        vw:window.innerWidth, vh:window.innerHeight,
+        vw:vw, vh:vh,
         text:(el.innerText||'').replace(/\s+/g,''),
         vis:(document.visibilityState||''),
         dpr:(window.devicePixelRatio||1)
