@@ -250,13 +250,40 @@ ocr-exam-app/
 - 窗口标题栏：`titlebarSeparatorStyle = .none` + **界面自己画的 1px 常驻线**
   （`.line` 在这套「隐藏标题 + 透明标题栏」的窗口上不生效，只在 hover 时出现）
 
+### 加一个文件到底做了什么（第 8 轮性能排查的结论）
+
+用户 2026-10-29 问「10 个文件以上粘贴 / 上传 / 拖放为什么那么卡，难道已经 base64 切片了」。
+**和 base64 无关**：分片（96000 字符灌 `window.__wbF`）只发生在「把附件传给 DeepSeek」那一步，
+加文件时一次都不碰。卡的是下面三件事，现在都已改掉：
+
+| 原来 | 现在 |
+|---|---|
+| `self.thumb = NSImage(contentsOf: url)` —— 整张原图当缩略图，4000×3000 一张约 48MB 位图，卡片只画 84pt | `CGImageSourceCreateThumbnailAtIndex` 降采样到 **360px**（`UploadItem.makeThumbnail`），单张 1–3ms |
+| 判重把**整份文件**读进内存算 SHA-256 | `fingerprint(ofFileAt:)` 只读**头 128KB + 尾 128KB** + 字节数（小于 256KB 时头尾重叠＝全量，更准） |
+| 一个文件一次 `uploads.append`，一次 @Published 变更就整张卡片重排一遍 | `acceptBatch` → 后台 `buildItems` 建好全部卡片 → `commitBatch` **整批只写一次** `uploads` |
+| 剪贴板大图按原尺寸编码 PNG（10MB+，一两秒） | 长边先缩到 **2048**（`pasteMaxPixel`）再编码，缩略图从这张小 PNG 再降采样 |
+
+两条新铁律：
+
+1. **任何进 `uploads` 的批量操作，只能写一次** —— 循环里 `append` 就是 N 次全卡片重绘。
+2. **预览卡片里永远不许放原图** —— `NSImage` 是懒解码，一旦被 `Image(nsImage:)` 画出来
+   就按原始像素占内存；缩略图必须走 `makeThumbnail`。
+
+量法：`--batchperftest` 造 12 张 2400×3200 JPEG，量「URL → 卡片」的总耗时。
+当前实测 **86 ms / 12 张（7.2 ms 一张）**，而且这 86ms 已经在后台线程，主线程只做最后那一次合并。
+
+自检里 `--pastetypetest` 需要同步读结果，所以有一个 `AppState.loadFilesOnMainThread` 开关
+把建卡片拉回主线程；正式运行永远走后台，别把它默认改成 true。
+
 ---
 
 ## 9. 待办
 
 - [ ] **跑一轮真实识别**（登录 DeepSeek → 传 8–20 张真卷子 → 看 Word 出来什么样），这是唯一还没验证的主链路
 - [ ] 摸清 DeepSeek 单条消息的附件数量上限，必要时把 48 张的上限调到实测值
-- [ ] 大批量上传的耗时测量（20 张 / 48 张各一次），必要时把 `waitFor` 的超时公式再放宽
+- [ ] 大批量上传的耗时测量（20 张 / 48 张各一次），必要时把 `waitFor` 的超时公式再放宽。
+      **注意区分两段**：①「加进预览框」已经量过（`--batchperftest`，86ms/12 张，已不卡）；
+      ②「把附件喂给 DeepSeek」还没量 —— 那一段走 base64 分片，48 张可能要几十秒，是下一个性能瓶颈
 - [ ] 图标第一版是代码画的，用户看完可能要求改（改 `tools/make_icon.swift` 即可）
 - [ ] 还没建 GitHub 仓库；`release.yml` 已按新名字改好，等用户下令推上去后，建库推 `v*` tag 就能出 Release
 
