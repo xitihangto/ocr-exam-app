@@ -98,6 +98,54 @@ struct ExamApp: App {
             exit(exists ? 0 : 1)
         }
 
+        // 自检：重复文件判定（--dedupetest）
+        // 用户 2026-10-29 第 4 轮第 3 条：内容一样的文件不许重复放进框里，
+        // 而且**只能丢掉新来的那份，框里原来那个必须留着**。
+        if CommandLine.arguments.contains("--dedupetest") {
+            let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("dedupe-test-\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: dir) }
+
+            func write(_ image: NSImage, to name: String) -> URL {
+                let url = dir.appendingPathComponent(name)
+                if let png = image.tiffRepresentation
+                    .flatMap({ NSBitmapImageRep(data: $0) })?
+                    .representation(using: .png, properties: [:]) {
+                    try? png.write(to: url)
+                }
+                return url
+            }
+
+            let images = AppState.demoImages(2)
+            let a = write(images[0], to: "page-1.png")              // 原件
+            let b = write(images[0], to: "复制自 page-1.png")        // 同内容、不同名字
+            let c = write(images[1], to: "page-2.png")              // 不同内容
+
+            let app = AppState()
+            let i1 = UploadItem(url: a)!
+            let i2 = UploadItem(url: b)!
+            let i3 = UploadItem(url: c)!
+
+            var lines: [String] = []
+            lines.append("指纹 a == b（同名内容同）：\(i1.fingerprint == i2.fingerprint)")
+            lines.append("指纹 a != c（内容不同）：  \(i1.fingerprint != i3.fingerprint)")
+            lines.append("加入 a       → \(app.addUpload(i1, for: .paper))")
+            lines.append("加入 b(重复) → \(app.addUpload(i2, for: .paper))")
+            lines.append("加入 c       → \(app.addUpload(i3, for: .paper))")
+            let kept = app.items(for: .paper)
+            lines.append("框里剩下 \(kept.count) 个（应为 2）")
+            lines.append("原来那个还在：\(kept.first?.name == a.lastPathComponent)")
+            FileHandle.standardError.write(Data((lines.joined(separator: "\n") + "\n").utf8))
+
+            let ok = i1.fingerprint == i2.fingerprint
+                && i1.fingerprint != i3.fingerprint
+                && kept.count == 2
+                && kept.first?.name == a.lastPathComponent
+            exit(ok ? 0 : 1)
+        }
+
+
         // 自检：提示词拼装（--prompttest）——不用真跑一遍也能看 AI 收到什么
         if CommandLine.arguments.contains("--prompttest") {
             // 三种常态：单个 PDF、一整套图片、20 张手机照片
@@ -324,6 +372,7 @@ struct ContentView: View {
     @State private var generateHover = false
     @State private var exitPrimaryHover = false
     @State private var logoutPrimaryHover = false
+    @State private var clearPrimaryHover = false
     @State private var loginHover = false
     @State private var loginBreathing = false
     @State private var recheckHover = false
@@ -426,6 +475,11 @@ struct ContentView: View {
         .overlay {
             if showLogoutConfirm {
                 logoutConfirmOverlay
+            }
+        }
+        .overlay {
+            if state.clearConfirmSlot != nil {
+                clearConfirmOverlay
             }
         }
         .overlay(alignment: .top) {
@@ -613,6 +667,62 @@ struct ContentView: View {
             // 卡片定宽 360：小字一行约 24 个字，整段正好两行，不再被长句撑到满屏宽。
             .frame(width: 360)
             .trialGlassCard(cornerRadius: 16, shadowOpacity: 0.18, shadowRadius: 16)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: 清空确认弹窗（退出确认框的 85% 版）
+
+    /// 用户 2026-10-29 第 4 轮第 2 条：框里 6 个及以上文件时才弹。
+    /// 做法完全照搬退出确认框（整屏压暗 + 窗口正中 + 玻璃卡 + 主操作在左 / 取消在右 +
+    /// 回车确认 / Esc 取消），只是**长宽都缩到 85% 左右** ——
+    /// 所以字号、内边距、按钮间距、圆角、阴影半径都按 0.85 一起缩。
+    private var clearConfirmOverlay: some View {
+        let slot = state.clearConfirmSlot ?? .paper
+        let count = state.items(for: slot).count
+        return ZStack {
+            Color.black.opacity(0.30)
+            VStack(spacing: 12) {
+                Text("清空这 \(count) 个文件？")
+                    .font(.system(size: 13.5, weight: .semibold))
+                Text("清空后需要重新选择或粘贴。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 11) {
+                    Button {
+                        state.confirmClear()
+                    } label: {
+                        Text("清空")
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .padding(.horizontal, 17)
+                            .padding(.vertical, 5)
+                    }
+                    .dialogGlassProminentButtonStyle()
+                    .tint(Color.brandRed)
+                    .foregroundStyle(.white)
+                    // 叠层不接点击，否则会挡住系统玻璃按钮（和退出确认框同一个坑）
+                    .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(Color.black.opacity(clearPrimaryHover ? 0.06 : 0))
+                        .allowsHitTesting(false))
+                    .onHover { clearPrimaryHover = $0 }
+                    .animation(.easeOut(duration: 0.15), value: clearPrimaryHover)
+                    .keyboardShortcut(.defaultAction)
+
+                    Button {
+                        state.cancelClear()
+                    } label: {
+                        Text("取消")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .padding(.horizontal, 17)
+                            .padding(.vertical, 5)
+                    }
+                    .dialogGlassButtonStyle()
+                    .keyboardShortcut(.cancelAction)
+                }
+                .padding(.top, 3)
+            }
+            .padding(20)
+            .trialGlassCard(cornerRadius: 14, shadowOpacity: 0.18, shadowRadius: 14)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -891,6 +1001,13 @@ struct Backdrop: View {
 /// 占整行会把框撑高、620×720 的固定窗口就装不下了），所以空位用透明占位撑住。
 /// 「点击此处粘贴文件」那个标签已经删了（用户说多余），
 /// 粘贴提示改由副标题临时改写承担，不占额外高度。
+/// 预览区的滚动偏移（自绘滚动条用）。
+/// 探针是网格背后的一个 `GeometryReader`：它相对滚动可视区顶部的 `minY` 取反就是偏移。
+struct PreviewScrollKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct UploadCard: View {
     @EnvironmentObject var state: AppState
     let slot: AppState.Slot
@@ -902,6 +1019,8 @@ struct UploadCard: View {
     @State private var cardHover = false
     /// 「清空」按钮 hover
     @State private var clearHover = false
+    /// 预览区当前滚动偏移（自绘滚动条用）
+    @State private var scrollOffset: CGFloat = 0
 
     private var items: [UploadItem] { state.uploads[slot] ?? [] }
     private var armed: Bool { state.pasteArmed == slot }
@@ -1058,36 +1177,72 @@ struct UploadCard: View {
         }
     }
 
-    /// 卡片右上角的「清空」（用户 2026-10-29 第 3 轮第 5 条）。
+    /// 卡片右上角的「清空」（用户 2026-10-29 第 3 轮第 5 条，第 4 轮第 2 条改成玻璃形态）。
     /// 一次把框里的文件全清掉，省得一张张点右上角的叉。
-    /// 位置：标题那一行的行末 —— 也就是卡片的右上角；卡片本身有 15pt 左右内边距，
-    /// 按钮自己再留 7pt 横内边距，不会贴到边框上。
+    /// 位置：标题那一行的行末 —— 也就是卡片的右上角；卡片本身有 15pt 左右内边距，不会贴边。
+    ///
+    /// **闪烁修复**（用户报 hover 时闪）：以前有两个 hover 源（`.onHover` + `.handCursor()` 的
+    /// `onContinuousHover`）在同一个按钮上打架，而且按钮宽度由内容撑开、hover 一重排就会
+    /// 在「鼠标进 / 出」之间来回跳。现在：只留一个 hover 源、**宽高固定 58×22**（内容不再影响布局）、
+    /// hover 效果全部用叠层 `opacity` 做，不再换填充色 —— 布局一动不动，就不会闪。
     private var clearAllButton: some View {
         Button {
             state.closePasteMenu()
-            state.clearFile(for: slot)
+            state.requestClear(for: slot)
         } label: {
-            HStack(spacing: 3) {
+            HStack(spacing: 3.5) {
                 Image(systemName: "trash")
                     .font(.system(size: 9.5, weight: .semibold))
                 Text("清空")
                     .font(.system(size: 10.5, weight: .medium))
             }
-            .foregroundStyle(clearHover ? Color.brandRed : Color.secondary)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.brandRed.opacity(clearHover ? 0.10 : 0))
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            // 默认状态比原来的 .secondary 深一点（用户要求）
+            .foregroundStyle(clearHover ? Color.brandRed : Color.primary.opacity(0.75))
+            .frame(width: 58, height: 22)
+            .background { clearButtonGlass }
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
         .buttonStyle(.plain)
-        .handCursor()
-        .onHover { clearHover = $0 }
-        .animation(.easeOut(duration: 0.12), value: clearHover)
+        .onHover { hovering in
+            // 只在真的变了才写，避免同一状态反复触发重绘
+            guard clearHover != hovering else { return }
+            clearHover = hovering
+        }
         .help("清空这个框里的所有文件")
         .transition(.opacity)
+    }
+
+    /// 「清空」按钮的玻璃底：材质 + 内阴影 + 外阴影。
+    ///
+    /// SwiftUI 没有内阴影，这里用「一圈描边 + 模糊 + 裁进圆角」模拟：
+    /// 描边往里晕开一点点，看起来就是边缘压暗的内阴影。
+    /// 两层叠色（默认 / hover）都用 `opacity` 切换，不换颜色值，避免 hover 时重新合成闪烁。
+    private var clearButtonGlass: some View {
+        let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
+        return ZStack {
+            shape.fill(.ultraThinMaterial)
+            // 默认压深一点
+            shape.fill(Color.black.opacity(0.055))
+                .opacity(clearHover ? 0 : 1)
+            // hover：淡红底
+            shape.fill(Color.brandRed.opacity(0.13))
+                .opacity(clearHover ? 1 : 0)
+            // 内阴影
+            shape.strokeBorder(Color.black.opacity(clearHover ? 0.20 : 0.15), lineWidth: 1.6)
+                .blur(radius: 1.3)
+                .clipShape(shape)
+            // 上沿高光（玻璃感）
+            shape.strokeBorder(
+                LinearGradient(colors: [Color.white.opacity(0.80), Color.white.opacity(0.04)],
+                               startPoint: .top, endPoint: .bottom),
+                lineWidth: 0.9)
+            // 外描边
+            shape.strokeBorder(Color.black.opacity(0.09), lineWidth: 0.6)
+        }
+        .compositingGroup()
+        // 外阴影
+        .shadow(color: .black.opacity(0.11), radius: 1.8, y: 1)
+        .shadow(color: .black.opacity(0.05), radius: 0.5, y: 0.3)
     }
 
     /// 加号/文案 与 下方预览区 之间的分隔线（用户 2026-10-29 第 3 条）：
@@ -1110,7 +1265,7 @@ struct UploadCard: View {
     /// - **最多 8 行**（48 个），和 `limits` 里的图片上限对齐；
     /// - **3 行及以上才出现滚动条**，2 行正好铺满，不出现。
     private var previewArea: some View {
-        ScrollView(.vertical, showsIndicators: showsScrollbar) {
+        ScrollView(.vertical, showsIndicators: false) {
             LazyVGrid(columns: gridColumns, spacing: 8) {
                 ForEach(0..<slotCount, id: \.self) { index in
                     if index < items.count {
@@ -1121,10 +1276,25 @@ struct UploadCard: View {
                 }
             }
             .padding(.vertical, gridVPadding)
-            .padding(.trailing, 3)
+            .padding(.trailing, scrollBarGutter)
+            .background(
+                // 只为读滚动位置：一条 0 高度的探针，把内容相对可视区顶部的偏移报上来。
+                GeometryReader { g in
+                    Color.clear.preference(key: PreviewScrollKey.self,
+                                           value: -g.frame(in: .named("previewScroll")).minY)
+                }
+            )
+        }
+        .coordinateSpace(name: "previewScroll")
+        .onPreferenceChange(PreviewScrollKey.self) { value in
+            // 阈值一下就不写，免得每帧都触发一次重绘
+            if abs(scrollOffset - value) > 0.5 { scrollOffset = value }
         }
         .frame(maxWidth: .infinity)
         .frame(height: previewHeight)
+        // 自绘滚动条：**浮在上面**，不参与布局 —— 所以出现 3 行以上时，
+        // 预览格子一个像素都不会被挤小（用户 2026-10-29 第 4 轮第 1 条）。
+        .overlay(alignment: .topTrailing) { scrollIndicator }
         // 空框时的一句提示：**在本行居中**（用户 2026-10-29 第一条）。
         // 它只是文案：不挂手势、也不吃点击（allowsHitTesting(false)），
         // 点它跟点框里其他空白处一样，落到框自己的 tap 上。
@@ -1139,6 +1309,40 @@ struct UploadCard: View {
                     .transition(.opacity)
             }
         }
+    }
+
+    /// 自绘滚动条（用户 2026-10-29 第 4 轮第 1 条：再细一点、再淡一点、离框右边再近一点）。
+    ///
+    /// 为什么不用系统滚动条：它的粗细/明暗跟系统设置走，改不了；更麻烦的是
+    /// 一旦「始终显示滚动条」被打开，它**会吃掉布局宽度**，3 行以上时把预览格子挤小。
+    /// 自绘版是 overlay，永远不占位置，格子尺寸从第一行到最后一行都一样。
+    @ViewBuilder
+    private var scrollIndicator: some View {
+        if showsScrollbar {
+            let visible = previewHeight
+            let content = contentHeight
+            let thumbH = max(20, visible * min(1, visible / max(content, 1)))
+            let travel = max(visible - thumbH, 0)
+            let maxOffset = max(content - visible, 1)
+            let y = min(max(scrollOffset, 0), maxOffset) / maxOffset * travel
+
+            Capsule()
+                .fill(Color.secondary.opacity(0.22))
+                .frame(width: scrollBarWidth, height: thumbH)
+                .offset(y: y)
+                .padding(.trailing, 1)
+                .allowsHitTesting(false)
+        }
+    }
+
+    /// 滚动条粗细 / 距框右边的留白。
+    /// `scrollBarGutter` 是给格子留的那点空隙，**恒定不变** —— 不管有没有滚动条。
+    private let scrollBarWidth: CGFloat = 3
+    private let scrollBarGutter: CGFloat = 5
+
+    /// 内容总高度：行数 × 格子高 + 行距 + 上下内边距。
+    private var contentHeight: CGFloat {
+        CGFloat(rowCount) * tileHeight + CGFloat(rowCount - 1) * 8 + gridVPadding * 2
     }
 
     /// 一共几行：12 个以内恒 2 行，超过才按需加，最多 8 行。

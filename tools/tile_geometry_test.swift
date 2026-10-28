@@ -55,7 +55,8 @@ struct NewTile: View {
 }
 
 @MainActor func measure<V: View>(_ v: V, _ label: String) {
-    let r = ImageRenderer(content: v.frame(width: 546))
+    // 541 = 卡片内容区 546 - 右侧给滚动条留的 5（scrollBarGutter）
+    let r = ImageRenderer(content: v.frame(width: 541))
     r.scale = 1
     guard let img = r.nsImage,
           let rep = NSBitmapImageRep(data: img.tiffRepresentation!) else {
@@ -116,7 +117,7 @@ MainActor.assumeIsolated {
         ForEach(0..<12) { _ in EmptySlot() }
     }
     .padding(.vertical, gridVPadding)
-    .frame(width: 543)          // 卡片内容区 546 - 给滚动条留的 3
+    .frame(width: 541)          // 卡片内容区 546 - 右侧给滚动条留的 5（scrollBarGutter）
 
     let r = ImageRenderer(content: grid)
     r.scale = 1
@@ -125,3 +126,25 @@ MainActor.assumeIsolated {
     print(String(format: "两行网格理想高度 %.1fpt ｜ 预览区可视高度 %.1fpt ｜ %@",
                  h, previewHeight, ok ? "✓ 正好铺满，不会滚" : "✗ 不匹配，会滚或被切"))
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 第三项：行数规则（用户 2026-10-29 第 3 轮第 4 条）
+//   12 个以内恒 2 行；超过按 ceil(n/6) 加行；上限 8 行（48 个）。
+
+func rowCount(_ n: Int) -> Int { min(8, max(2, (n + 5) / 6)) }
+
+let rowCases: [(files: Int, rows: Int, blanks: Int)] = [
+    (0, 2, 12), (1, 2, 11), (6, 2, 6), (12, 2, 0),
+    (13, 3, 5), (18, 3, 0), (19, 4, 5), (48, 8, 0),
+]
+var rowOK = true
+for c in rowCases {
+    let rows = rowCount(c.files)
+    let blanks = rows * 6 - c.files
+    let pass = rows == c.rows && blanks == c.blanks
+    rowOK = rowOK && pass
+    print("\(pass ? "✓" : "✗") \(c.files) 个文件 → \(rows) 行、\(blanks) 个虚框"
+          + (pass ? "" : "（期望 \(c.rows) 行、\(c.blanks) 个虚框）")
+          + " ｜ 滚动条 \(rows >= 3 ? "有" : "无")")
+}
+print(rowOK ? "行数规则全部正确" : "行数规则有错")

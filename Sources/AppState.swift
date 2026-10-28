@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import CryptoKit
 
 struct LoginStatus {
     enum Kind {
@@ -95,7 +96,26 @@ struct UploadItem: Identifiable, Equatable {
     /// （上传的文件自带文件名，见 `AppState.nextPasteName`）。
     var isPaste = false
 
+    /// 判重指纹（用户 2026-10-29 第 4 轮第 3 条）。
+    /// **按文件内容算，不按文件名** —— 同一个文件复制一份、改个名字再贴进来，也算重复。
+    /// 反过来，两个不同的文件即使同名也不算重复。
+    let fingerprint: String
+
     static func == (a: UploadItem, b: UploadItem) -> Bool { a.id == b.id }
+
+    /// 内容指纹：整份文件的 SHA-256，前面拼上字节数（顺手多一层保险）。
+    /// 试卷扫描件一般 1–5MB，一次 SHA-256 在几毫秒量级；
+    /// 特别大的 PDF 也只算一次（建卡片时算，之后一直带着）。
+    static func fingerprint(of data: Data) -> String {
+        let digest = SHA256.hash(data: data)
+        let hex = digest.map { String(format: "%02x", $0) }.joined()
+        return "\(data.count)-\(hex)"
+    }
+
+    static func fingerprint(ofFileAt url: URL) -> String? {
+        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
+        return fingerprint(of: data)
+    }
 
     var sizeText: String {
         sizeKB >= 1024 ? String(format: "%.1f MB", Double(sizeKB) / 1024) : "\(sizeKB) KB"
@@ -109,6 +129,8 @@ struct UploadItem: Identifiable, Equatable {
         self.name = url.lastPathComponent
         let bytes = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int ?? 0
         self.sizeKB = max(bytes / 1024, 1)
+        // 读不出内容就当没有指纹（空串），判重时不会误判成重复
+        self.fingerprint = Self.fingerprint(ofFileAt: url) ?? ""
         if Self.imageExtensions.contains(ext) {
             self.kind = .image
             self.thumb = NSImage(contentsOf: url)
@@ -133,6 +155,9 @@ struct UploadItem: Identifiable, Equatable {
             .flatMap { NSBitmapImageRep(data: $0) }?
             .representation(using: .png, properties: [:])
         self.sizeKB = max((png?.count ?? 0) / 1024, 1)
+        // 剪贴板图片按落盘后的 PNG 内容算指纹：
+        // 同一张图连着粘两次，序号不同、文件名不同，但内容一模一样 —— 必须判成重复。
+        self.fingerprint = png.map { UploadItem.fingerprint(of: $0) } ?? ""
 
         let url = UploadItem.pasteDirectory.appendingPathComponent("\(name).png")
         try? FileManager.default.createDirectory(at: UploadItem.pasteDirectory,
@@ -974,7 +999,7 @@ final class AppState: ObservableObject {
             showToast("这个文件类型不支持，只收 png / jpg 图片或 PDF", slot: slot)
             return
         }
-        if addUpload(item, for: slot) { rememberDirectory(url, slot: slot) }
+        if addUpload(item, for: slot) == .added { rememberDirectory(url, slot: slot) }
     }
 
     // MARK: - 上传框内容（图片 / PDF）
@@ -1032,16 +1057,43 @@ final class AppState: ObservableObject {
         return nil
     }
 
-    /// 放进框里。放不进去就弹短提示并返回 false。
+    /// 放进框里的结果
+    enum AddOutcome { case added, duplicate, rejected }
+
+    /// 这个文件是不是已经在框里了 —— **按内容指纹比，不按文件名**。
+    /// 指纹算不出来的（空串）一律当「不重复」，宁可可重复也不误拒。
+    func isDuplicate(_ item: UploadItem, for slot: Slot) -> Bool {
+        guard !item.fingerprint.isEmpty else { return false }
+        return items(for: slot).contains { $0.fingerprint == item.fingerprint }
+    }
+
+    /// 重复文件的提示。用户 2026-10-29 第 4 轮第 3 条：
+    /// 「冒泡逻辑参考超过文件数量或种类限制时的提示」—— 同一个 showToast、同一个位置（框中心）。
+    func duplicateToast(_ count: Int) -> String {
+        count <= 1
+            ? "这个文件已经在框里了，没有重复放进来"
+            : "有 \(count) 个文件已经在框里了，已跳过"
+    }
+
+    /// 放进框里。放不进去就弹短提示并说明原因。
+    ///
+    /// **判重在最前面**（用户 2026-10-29 第 4 轮第 3 条）：
+    /// 重复的文件直接不收，也**绝不删掉框里原来那个** —— 只丢新来的这份。
+    /// `quietDuplicate` 给批量粘贴/批量选择用：重复的不逐个冒泡，
+    /// 由调用方汇总成一条「有 N 个文件已经在框里了」，免得一次粘 4 个弹 4 次。
     @discardableResult
-    func addUpload(_ item: UploadItem, for slot: Slot) -> Bool {
+    func addUpload(_ item: UploadItem, for slot: Slot, quietDuplicate: Bool = false) -> AddOutcome {
+        if isDuplicate(item, for: slot) {
+            if !quietDuplicate { showToast(duplicateToast(1), slot: slot) }
+            return .duplicate
+        }
         if let reason = uploadRejection(for: slot, adding: item.kind) {
             showToast(reason, slot: slot)
-            return false
+            return .rejected
         }
         uploads[slot, default: []].append(item)
         if !isRunning && progress.tone == .ok { progress = ProgressInfo() }
-        return true
+        return .added
     }
 
     func removeUpload(_ id: UploadItem.ID, for slot: Slot) {
@@ -1058,6 +1110,34 @@ final class AppState: ObservableObject {
         for item in items(for: slot) { deletePasteFile(for: item) }
         uploads[slot] = nil
         if !isRunning && progress.tone == .ok { progress = ProgressInfo() }
+    }
+
+    // MARK: - 清空（≥6 个要先确认）
+
+    /// 6 个及以上才弹确认框（用户 2026-10-29 第 4 轮第 2 条）。
+    /// 少了不值当拦一道，多了点错一次就得重新选一遍。
+    static let clearConfirmThreshold = 6
+
+    /// 正在等确认清空的框；nil = 没弹
+    @Published var clearConfirmSlot: Slot?
+
+    /// 点「清空」按钮走这里：够多就先问一句，不够直接清。
+    func requestClear(for slot: Slot) {
+        if items(for: slot).count >= AppState.clearConfirmThreshold {
+            clearConfirmSlot = slot
+        } else {
+            clearFile(for: slot)
+        }
+    }
+
+    func confirmClear() {
+        guard let slot = clearConfirmSlot else { return }
+        clearConfirmSlot = nil
+        clearFile(for: slot)
+    }
+
+    func cancelClear() {
+        clearConfirmSlot = nil
     }
 
     /// 删掉我们落在临时目录里的剪贴板图片。
@@ -1084,7 +1164,10 @@ final class AppState: ObservableObject {
 
         if !urls.isEmpty {
             var accepted = 0
+            var duplicates = 0
+            var stopped = false
             for url in urls {
+                guard !stopped else { break }
                 guard let item = UploadItem(url: url) else {
                     if urls.count == 1 {
                         showToast("这个文件类型不支持，只收 png / jpg 图片或 PDF", slot: slot)
@@ -1092,15 +1175,24 @@ final class AppState: ObservableObject {
                     continue
                 }
                 // 成功放进框里不弹提示 —— 卡片本身就是反馈，
-                // 只有「类型不对 / 数量超了 / 混放」这种被拒的情况才冒泡
-                if addUpload(item, for: slot) { accepted += 1 } else { break }
+                // 只有「类型不对 / 重复 / 数量超了 / 混放」这种被拒的情况才冒泡。
+                // 重复的先攒着，整批走完只冒一次泡（一次粘 4 个不该弹 4 次）。
+                switch addUpload(item, for: slot, quietDuplicate: true) {
+                case .added:     accepted += 1
+                case .duplicate: duplicates += 1
+                case .rejected:  stopped = true      // addUpload 已经冒过泡，后面的不再试
+                }
             }
-            if accepted > 0 { return }
+            if duplicates > 0 && !stopped {
+                showToast(duplicateToast(duplicates), slot: slot)
+            }
+            if accepted > 0 || duplicates > 0 || stopped { return }
         }
         if let image = NSImage(pasteboard: pb) {
             let item = UploadItem(image: image, name: nextPasteName())
-            // 被拒（数量满了之类）就别在临时目录里留一张没人用的图
-            if !addUpload(item, for: slot), let url = item.url {
+            // 被拒（重复 / 数量满了）就别在临时目录里留一张没人用的图。
+            // 注意：只删**这次新写出来**的这一份，框里原来那张不动。
+            if addUpload(item, for: slot) != .added, let url = item.url {
                 try? FileManager.default.removeItem(at: url)
             }
             return
