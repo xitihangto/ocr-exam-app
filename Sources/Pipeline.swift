@@ -48,7 +48,7 @@ extension AppState {
         lines.append("")
         lines.append("""
         ━━ 情况 A：印刷体试卷 ━━
-        按附件 1 的规则把它转成一份完整的 Word 试卷。
+        按附件 1 的规则把它转成一份完整的 Word 试卷。**整批看下来手写远不到一半、只是零星混进来一两张手写图（误传），这几张直接跳过、不按试卷规则转录**，在「特别注意」里提一句就行。
         """)
         lines.append("")
         lines.append("""
