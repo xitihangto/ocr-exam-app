@@ -912,8 +912,9 @@ struct UploadCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 11) {
+        VStack(alignment: .leading, spacing: 0) {
             headerRow
+            separator
             previewArea
         }
         .padding(.horizontal, 15)
@@ -1016,14 +1017,19 @@ struct UploadCard: View {
                             .foregroundStyle(Color.brandPink)
                     }
                     Spacer(minLength: 8)
-                    // 等待粘贴时这行右边冒出提示。以前是压在标题正中的 overlay，
-                    // 加号移到左边之后这里有了右侧空白，直接排在行末更省事、也不会撞标题。
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // 等待粘贴时的紫色提示（用户 2026-10-29 第 2 条）：
+                // 居中基准是**这一行文案区**，不是整张卡片 —— 所以挂在文案区自己身上做 overlay，
+                // 左侧那个 46pt 的加号不参与计算。只显示不挡点击。
+                .overlay(alignment: .center) {
                     if armed {
                         Text("按 ⌘V 或者右键粘贴，点框外取消")
                             .font(.system(size: 10.5, weight: .medium))
                             .foregroundStyle(Color.brandAccent)
                             .lineLimit(1)
                             .fixedSize()
+                            .allowsHitTesting(false)
                             .transition(.opacity)
                     }
                 }
@@ -1040,16 +1046,33 @@ struct UploadCard: View {
         }
     }
 
-    // MARK: 预览区（两行，一行 6 个）
+    /// 加号/文案 与 下方预览区 之间的分隔线（用户 2026-10-29 第 3 条）：
+    /// 很细（1px）、很淡，只是把「说明区」和「文件区」轻轻划开，不抢视线。
+    /// 上下各留 10pt，代替原来 VStack 的 11pt 间距。
+    private var separator: some View {
+        Rectangle()
+            .fill(Color.secondary.opacity(0.10))
+            .frame(height: 1)
+            .padding(.top, 10)
+            .padding(.bottom, 10)
+            .allowsHitTesting(false)
+    }
 
-    /// 用户 2026-10-29 要求：预览分两行、每行约 6 个，空出来的高度就给这块。
-    /// 高度**固定**（永远是两行），空框和放满之间切换时卡片不会忽高忽低，
-    /// 下面的进度卡、Word 卡也就不会跟着上下跳。
+    // MARK: 预览区（恒定两行，一行 6 个）
+
+    /// 用户 2026-10-29 第 4 条：空白区固定分成 **两行 × 每行 6 个**，
+    /// 没文件的位置放**很淡的虚框占位**，格子尺寸恒定 ——
+    /// 不再「1 个文件就铺满一整行、3 个就三等分」，卡片也不会随文件数忽高忽低。
+    /// 超过 12 个才滚动，滚动条只在真超过时才出现。
     private var previewArea: some View {
-        ScrollView(.vertical, showsIndicators: items.count > columnCount * 2) {
+        ScrollView(.vertical, showsIndicators: items.count > slotCount) {
             LazyVGrid(columns: gridColumns, spacing: 8) {
-                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                    tile(item, index: index)
+                ForEach(0..<slotCount, id: \.self) { index in
+                    if index < items.count {
+                        tile(items[index], index: index)
+                    } else {
+                        emptySlot
+                    }
                 }
             }
             .padding(.vertical, 1)
@@ -1072,20 +1095,30 @@ struct UploadCard: View {
         }
     }
 
-    /// 一行几个：1–3 个文件时按个数分栏（只放一个 PDF 时就是整行铺开），4 个起固定 6 栏。
-    private var columnCount: Int {
-        items.count <= 3 ? max(items.count, 1) : 6
+    /// 一共几个格子：永远给满两行 12 个；超过 12 个就按 6 的倍数往上加（多出来的行靠滚动看）。
+    private var slotCount: Int {
+        max(12, ((items.count + 5) / 6) * 6)
     }
 
+    /// 固定 6 栏（用户 2026-10-29 第 4 条：不再按文件数动态改栏数）。
     private var gridColumns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: 8), count: columnCount)
+        Array(repeating: GridItem(.flexible(), spacing: 8), count: 6)
     }
 
     /// 每个格子的高度。两行 + 行距 = 预览区高度。
     /// 用户 2026-10-29：整框再增高，让「Word 试卷卡底部 → 窗口底边」的间距缩到原来的 0.4 倍。
-    /// 实测原来 51.5pt，目标 ~20.6pt，所以格子从 72 抬到 87（两行共 +30pt）。
-    private let tileHeight: CGFloat = 87
+    /// 加了分隔线又多吃掉 10pt，所以格子定在 82（两行 164 + 8 = 172），实测底部间距 ~21pt。
+    private let tileHeight: CGFloat = 82
     private var previewHeight: CGFloat { tileHeight * 2 + 8 }
+
+    /// 空位占位框：只有一圈很淡的虚线，没有底色 —— 看得见「这儿能放一张」，又不吵。
+    private var emptySlot: some View {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(Color.secondary.opacity(0.13),
+                          style: StrokeStyle(lineWidth: 1, dash: [4, 3.5]))
+            .frame(height: tileHeight)
+            .allowsHitTesting(false)
+    }
 
     private var plusButton: some View {
         Button {
