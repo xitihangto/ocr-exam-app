@@ -224,9 +224,19 @@ ocr-exam-app/
 | 启动瞬间判「未登录」 | 明明登录了却闪登录按钮 | 探针加 `bodyLen` + `hasLoginButton` |
 | Finder 里没图标 | 只有 Dock 有 | `SetFile -a B` 标 bundle |
 | 显示名改 Info.plist 不生效 | 名字还是旧的 | 读的是 `zh-Hans.lproj/InfoPlist.strings` |
+| 截图量尺寸截到全黑 | 亮度 0、找不到边框 | App 里那个**隐形 WKWebView 窗口**也是 layer 0 且 >400×400，会先被 `CGWindowListCopyWindowInfo` 匹配到；取「宽度最接近主窗口 620pt」的那个，不是第一个 |
 
 **本工程新增的一条**：`AppState` 里删 `syncLegacyURL` 时，容易连带删掉紧邻的
 `pasteFromClipboard`（整块替换的边界没算准）—— 编译报 "has no dynamic member"，先查这个函数还在不在。
+
+### 量界面尺寸的唯一工具
+
+`tools/measure_gap.swift`：`swift tools/measure_gap.swift` 自动找主窗口 →
+`screencapture -x -o -l<id>` → 沿中心列/1-4 列自下而上扫亮度，找卡片下边缘，换算成 pt。
+只在需要**精确对齐**（如"底部间距缩到 0.4 倍"）时用，用完就停 ——
+它只量数字，不看外观，和第 7 条铁律不冲突。上传卡的当前常量：
+`tileHeight = 82`（两行 164 + 行距 8 = 172）、分隔线上下各 10pt、
+Word 卡底部到窗口底边 **21.5pt**。改高度后跑一次复测即可。
 
 ---
 
