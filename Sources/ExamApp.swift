@@ -135,13 +135,28 @@ struct ExamApp: App {
             let t0 = Date()
             let built = AppState.buildItems(from: urls)
             let dt = Date().timeIntervalSince(t0)
+
+            // 分项：判重（读头尾 128KB + SHA-256）单独计时。
+            // 用来回答「判重改成比文件路径会不会更快」—— 先看清它本来占多少。
+            let t1 = Date()
+            for url in urls { _ = UploadItem.fingerprint(ofFileAt: url) }
+            let hashMS = Date().timeIntervalSince(t1) * 1000
+
+            // 分项：只做缩略图（不含判重）
+            let t2 = Date()
+            for url in urls { _ = UploadItem.makeThumbnail(url: url) }
+            let thumbMS = Date().timeIntervalSince(t2) * 1000
+
             let bytes = urls.compactMap {
                 (try? FileManager.default.attributesOfItem(atPath: $0.path))?[.size] as? Int
             }.reduce(0, +)
             let line = String(format:
-                "%d 张 %dx%d JPEG（共 %.1f MB）：建卡片 %.0f ms，平均 %.1f ms/张；认不出 %d 个\n",
+                "%d 张 %dx%d JPEG（共 %.1f MB）：建卡片 %.0f ms，平均 %.1f ms/张；认不出 %d 个\n"
+                + "  其中判重 %.1f ms（%.1f%%）｜缩略图 %.1f ms（%.1f%%）\n",
                 urls.count, w, h, Double(bytes) / 1024 / 1024,
-                dt * 1000, dt * 1000 / Double(max(urls.count, 1)), built.unsupported)
+                dt * 1000, dt * 1000 / Double(max(urls.count, 1)), built.unsupported,
+                hashMS, hashMS / max(dt * 1000, 0.001) * 100,
+                thumbMS, thumbMS / max(dt * 1000, 0.001) * 100)
             FileHandle.standardError.write(Data(line.utf8))
             exit(urls.count == 12 && built.items.count == 12 ? 0 : 1)
         }
