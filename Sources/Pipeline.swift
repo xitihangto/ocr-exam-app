@@ -305,7 +305,7 @@ extension AppState {
         // 后一个数常见是 0：网页接手后会把 input 清空，属正常，别当成注入失败。
         log("注入：\(injected)")
         say("正在把试卷交给 AI…",
-            detail: "一共 \(uploads.count) 个文件：规则 1 个、试卷 \(paperFiles.count) 个",
+            detail: "一共 \(uploads.count) 个文件：规则 2 个、试卷 \(paperFiles.count) 个",
             fraction: 0.55, running: true)
 
         // 4. 等附件条渲染出来。
@@ -317,23 +317,28 @@ extension AppState {
             : "还没出现：\(missing.joined(separator: "、"))")
 
         // 4.1 .md 被拒收就改 .txt 重试，并同步替换提示词里的文件名
-        if missing.contains("试卷识别规则.md") {
-            log("DeepSeek 不收 .md，改用 .txt 重试")
+        //
+        // 规则是**两份** md（第 13 轮加了《学生手写文章转录规则.md》），所以必须逐个补传。
+        // 原来只写死了第一份：真碰上 DeepSeek 不收 .md 时，第二份会留在 missing 里，
+        // 补完第一份照样抛「这些文件没能放进对话框」—— 补了个寂寞。
+        for index in 0..<2 where missing.contains(uploads[index].name) {
+            let oldName = uploads[index].name
+            let newName = (oldName as NSString).deletingPathExtension + ".txt"
+            log("DeepSeek 不收 .md，\(oldName) 改用 .txt 重试")
             say("正在换一种格式重传规则文件…", fraction: 0.6, running: true)
-            uploads[0].name = "试卷识别规则.txt"
-            uploads[0].mime = "text/plain"
-            prompt = prompt.replacingOccurrences(
-                of: "《试卷识别规则.md》", with: "《试卷识别规则.txt》")
+            uploads[index].name = newName
+            uploads[index].mime = "text/plain"
+            prompt = prompt.replacingOccurrences(of: "《\(oldName)》", with: "《\(newName)》")
 
             let retry: [[String: Any]] = [
-                ["idx": 0, "name": uploads[0].name, "type": uploads[0].mime]
+                ["idx": index, "name": newName, "type": "text/plain"]
             ]
             _ = try self.js(Scripts.commitFiles(defsJSON: jsonString(retry)))
-            let still = try waitFor([(name: uploads[0].name, isImage: false)], timeout: 20)
+            let still = try waitFor([(name: newName, isImage: false)], timeout: 20)
             if !still.isEmpty {
                 throw BridgeError.failed("规则文件传不上去，DeepSeek 可能既不收 .md 也不收 .txt")
             }
-            missing.removeAll { $0 == "试卷识别规则.md" }
+            missing.removeAll { $0 == oldName }
         }
 
         if !missing.isEmpty {

@@ -1550,6 +1550,7 @@ final class AppState: ObservableObject {
             "等输入框出现：0.4 秒",
             "页面：{\"textarea\":true,\"fileInputs\":1,\"sendLabel\":\"\",\"deepThink\":true,\"smartSearch\":true}",
             "载入 试卷识别规则.md（9 KB）",
+            "载入 学生手写文章转录规则.md（8 KB）",
             "载入 语文第3套-1.jpg（1.8 MB）",
             "载入 语文第3套-2.jpg（2.1 MB）",
             "载入 语文第3套-3.jpg（1.9 MB）",
