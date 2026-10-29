@@ -116,7 +116,11 @@ BIN="dist/试卷识别.app/Contents/MacOS/ExamOCR"
 `--uidemo`（生成中）/ `--uidemo2`（已出成品）/ `--uidemo3`（失败）/
 `--uidemo7`（20 张图，网格撑满）/ `--uidemo8`（等待粘贴 + 超限提示）/ `--uidemo9`（大图预览）/
 `--logdemo`（日志面板）/ `--scrolldemo`（先 12 张、2.5 秒后补 3 张，验「加行自动滚到底」）/
+`--paneldemo`（**日志面板 + 纯考卷确认框同时出现**，专门核对这两块的位置）/
 `--preview <文件>`（直接打开某文件的预览）
+
+⚠️ **这些开关必须直接跑二进制**，用 `open -n ... --args` 传不进去（实测两种情况都试过，
+起来的是空界面）：`"/Applications/试卷识别.app/Contents/MacOS/ExamOCR" --paneldemo`
 
 `--scrolldemo` 会把滚动目标打到 stderr（`[scroll] want=… target=… max=… doc=… vis=…`）——
 stdout 重定向到文件时是全缓冲的，`print` 看不到，所以这条走 `FileHandle.standardError`。
