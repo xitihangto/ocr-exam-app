@@ -1773,7 +1773,10 @@ struct UploadCard: View {
             let maxOffset = max(content - visible, 1)
             let y = min(max(scrollOffset, 0), maxOffset) / maxOffset * travel
 
-            ZStack(alignment: .top) {
+            // ⚠️ 必须 `.topTrailing`，不能用默认的 `.top`：ZStack 默认水平居中，
+            // 14pt 的命中区里塞 6pt 的胶囊会被居中，右边缘从 1pt 变成 5pt —— 看起来
+            // 就是「滚动条往左挪了一点」（用户 2026-10-29 第 10 轮一眼看出来）。
+            ZStack(alignment: .topTrailing) {
                 // 命中区：整条透明的，只有右边这一窄溜
                 Color.clear
                     .frame(width: scrollHitWidth)
