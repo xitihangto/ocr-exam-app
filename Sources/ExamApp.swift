@@ -541,13 +541,17 @@ struct ContentView: View {
     /// Word 卡上沿（窗口坐标，由 `WordCardTopKey` 量出来）。0 = 还没量到。
     @State private var wordCardTop: CGFloat = 0
 
-    /// 压暗层的高度 = **Word 卡的上沿 - 4**（量出来的，见 `WordCardTopKey`）。
-    /// 蒙版下沿和 Word 卡之间只留 4pt，日志卡在蒙版里再上下各留 4 —— 三者叠起来
-    /// 面板下边缘离 Word 卡只有 8pt，视觉上是「贴着」而不是「飘着」。
+    /// 用户 2026-10-29 第 12 轮：「这 2 个的下边缘统一往下挪 3px」——
+    /// 日志面板和纯考卷确认框的下边缘一起往下走这么多。改这一个数，两处一起动。
+    static let panelBottomDrop: CGFloat = 3
+
+    /// 压暗层的高度 = **Word 卡的上沿 - 4 + panelBottomDrop**（量出来的，见 `WordCardTopKey`）。
+    /// 原来蒙版下沿离 Word 卡 4pt、日志卡在蒙版里上下各留 4（面板下边缘离 Word 卡 8pt）；
+    /// 现在整体往下挪 3pt，变成蒙版离 1pt、卡片上留 4 下留 1，面板下边缘离 Word 卡 5pt。
     /// 量不到时（首帧、或页面滚到别处导致数字离谱）退回老的 548。
     private var panelScrimHeight: CGFloat {
         guard wordCardTop > 300, wordCardTop < 700 else { return 548 }
-        return wordCardTop - 4
+        return wordCardTop - 4 + Self.panelBottomDrop
     }
 
     var body: some View {
@@ -996,8 +1000,11 @@ struct ContentView: View {
             .frame(width: 480)
             .padding(20)
             .trialGlassCard(cornerRadius: 14, shadowOpacity: 0.18, shadowRadius: 14)
+            // 用户 2026-10-29 第 12 轮：下边缘往下挪 3pt。
+            // 蒙版一起长了 3pt，居中点自己已经往下走了 1.5pt，这里再补 1.5pt 凑够 3。
+            .offset(y: Self.panelBottomDrop / 2)
         }
-        // 蒙版高度跟日志面板共用同一个量出来的值（Word 卡上沿 - 4），卡片在蒙版里自动居中 ——
+        // 蒙版高度跟日志面板共用同一个量出来的值（Word 卡上沿 - 1），卡片在蒙版里自动居中 ——
         // 不再写死 padding(.top, 186)，改文案也不会把卡片顶偏。
         .frame(height: panelScrimHeight)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -2792,7 +2799,8 @@ struct LogPanel: View {
             Divider()
             logList
         }
-        .frame(width: 566, height: max(120, scrimHeight - 8))
+        // 蒙版里上留 4、下留 4，再整体往下挪 panelBottomDrop —— 下边缘因此比原来低 3pt。
+        .frame(width: 566, height: max(120, scrimHeight - 8 + ContentView.panelBottomDrop))
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
             .fill(Color(nsColor: .windowBackgroundColor)))
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
