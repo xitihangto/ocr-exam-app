@@ -1991,6 +1991,39 @@ final class AppState: ObservableObject {
 
     // MARK: - 开发用：界面状态演示
 
+    /// 开发用：`--paneldemo`
+    ///
+    /// 一次把「运行日志面板」和「要不要生成纯考卷」那个确认框**同时**摆出来，
+    /// 专门用来核对这两块的位置关系（用户 2026-10-29 第 11 轮要的）。
+    ///
+    /// 底子按真机跑完一轮的样子搭：含答案那份**已下载**（`docx = .idle`，按钮显示「含答案已下载」）、
+    /// 纯考卷**待下载**，Word 卡是两份形态 —— 这样弹窗和面板的相对位置跟真实场景一致，
+    /// 不会因为卡片高度不同而看着不一样。
+    ///
+    /// 弹窗盖在面板上面：先看到确认框，点「不用了」或 Esc 就露出下面的日志面板。
+    func applyPanelDemo() {
+        login = LoginStatus(kind: .loggedIn)
+        loginSettled = true
+        pollingStopped = true
+        isRunning = false
+        progress = ProgressInfo(
+            title: "纯考卷生成好了 ✓",
+            detail: "两份都在下面，点按钮保存",
+            fraction: 1, running: false, tone: .ok)
+        docxStamp = "20261029-2100"
+        docx = .idle
+        // 造一个 48 KB 的占位文件，让 Word 卡能显示真实体积
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("paneldemo-纯考卷.docx")
+        try? Data(repeating: 0, count: 49_000).write(to: tmp)
+        plainDocx = .ready(tmp)
+        uploads[.paper] = AppState.demoImages(12).enumerated().map {
+            UploadItem(image: $1, name: "剪贴板图片\($0 + 1)")
+        }
+        applyLogDemo()          // 填日志 + showLog = true
+        plainOffer = PlainOffer(answerCount: 14)
+    }
+
     /// 临时：验证「加了行自动滚到底」。先 12 张（正好 2 行、无滚动条），
     /// 2.5 秒后补 3 张 → 15 张 = 3 行，应该看到 0.5 秒滚到最下面。
     /// 验完就删。

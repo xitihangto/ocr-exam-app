@@ -616,7 +616,10 @@ struct ContentView: View {
                 return
             }
             // 开发用：--uidemo / --uidemo2 只改界面状态，方便截图检查视觉
-            if CommandLine.arguments.contains("--scrolldemo") {
+            if CommandLine.arguments.contains("--paneldemo") {
+                // 同时摆出「日志面板」和「纯考卷确认框」，专门看位置
+                state.applyPanelDemo()
+            } else if CommandLine.arguments.contains("--scrolldemo") {
                 PreviewScroller.debugLog = true
                 state.applyScrollDemo()
             } else if CommandLine.arguments.contains("--uidemo") {
