@@ -63,6 +63,28 @@ cd ocr-exam-app
 无 Xcode 工程，纯 `swiftc -O` 手工组装 bundle。自动化会话里必须带 `-disable-sandbox`，
 否则 SwiftUI 的 `@State` 宏展不开（build.sh 里已自动判断）。
 
+### ⚠️ 重启顺序：先 kill，再 build（别反过来）
+
+`build.sh` 最后一行自己会 `open "/Applications/试卷识别.app"`。
+如果按「build → kill → open」的老顺序，屏幕上会看到 app 被启动两次：
+
+1. build 末尾那次 `open` —— **其实没生效**：旧进程还活着、同一个 bundle id，
+   macOS 只是把旧窗口激活，不会启动新代码；
+2. 然后 `kill` 掉旧进程，再 `open` —— 这一次才真正让新版本跑起来。
+
+正确做法是**先把旧进程杀掉，再 build**，让 build 末尾那次 open 成为唯一一次干净启动：
+
+```bash
+OLD=$(pgrep -f "试卷识别.app/Contents/MacOS/ExamOCR" | head -1)
+[ -n "$OLD" ] && kill -TERM $OLD; sleep 1
+./build.sh --install          # 编译 + 安装 + 自己 open，一次到位
+pgrep -fl "试卷识别"           # 确认只有一个进程
+```
+
+**另一个坑（2026-10-29 踩过）**：不要手动 `open dist/试卷识别.app`。
+dist 和 /Applications 是两份同 bundle id 的包，各跑一个实例，会出现两个窗口。
+要么只 open /Applications，要么让 build.sh 自己 open。
+
 ### 命令行自检
 
 ```bash
