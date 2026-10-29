@@ -32,7 +32,7 @@ jobs:
       - name: Check built app version matches tag
         run: |
           test -d "dist/试卷识别.app"
-          VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "dist/高三英语作文批改.app/Contents/Info.plist")"
+          VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "dist/试卷识别.app/Contents/Info.plist")"
           TAG="${{ github.ref_name }}"
           echo "tag=$TAG app_version=$VERSION"
           test "$VERSION" = "${TAG#v}" || { echo "版本与标签不一致：包内是 $VERSION，标签是 $TAG，已停止"; exit 1; }
