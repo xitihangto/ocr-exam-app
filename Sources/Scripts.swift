@@ -318,17 +318,22 @@ enum Scripts {
     ///   endsWithMain = 最后一个代码块以 `if __name__ == "__main__": main()` 收尾
     ///   afterLines   = 该代码块之后还有几行非空说明文字
     /// 两者同时成立 = 脚本写完了且完整（AI 收尾必有这段，写完必带说明）
-    static let replyState = #"""
-    (function(){
-      var out={generating:false,hasContinue:false,blocks:0,codes:0,pres:0,
-               codeLen:0,textLen:0,stopLabel:'',contLabel:'',vis:'',
-               endsWithMain:false,hasSaveTail:false,hasEndMark:false,looksComplete:false,
-               afterLines:0,codeTail:'',inputBtns:[]};
-      try{out.vis=document.visibilityState||'';}catch(e){}
-      // 虚拟滚动只渲染可视区：对话很长、滚动条没跟到底时，最新代码可能不在 DOM 里。
-      // 浏览器窗口本身是隐形的，滚到底不会打扰用户，但能让虚拟列表把最新一段渲染出来，
-      // 后面量 codeLen / textLen 才不会量到一段旧的、静止的内容。
-      try{var vl=document.querySelector('.ds-virtual-list'); if(vl) vl.scrollTop=vl.scrollHeight;}catch(e){}
+    ///
+    /// - Parameter baseBlocks: 只统计这个序号之后的代码块长度。第一轮传 0；
+    ///   第二轮（纯考卷）传第一轮结束时的块数 —— 否则 `codeLen` 会把第一轮的 6 万字也算进来，
+    ///   状态框就会显示「代码目前 9 万字」，看着像在写一份两倍长的脚本（2026-10-29 实跑踩到）。
+    static func replyState(baseBlocks: Int) -> String {
+        #"""
+        (function(){
+          var out={generating:false,hasContinue:false,blocks:0,codes:0,pres:0,
+                   codeLen:0,textLen:0,stopLabel:'',contLabel:'',vis:'',
+                   endsWithMain:false,hasSaveTail:false,hasEndMark:false,looksComplete:false,
+                   afterLines:0,codeTail:'',inputBtns:[]};
+          try{out.vis=document.visibilityState||'';}catch(e){}
+          // 虚拟滚动只渲染可视区：对话很长、滚动条没跟到底时，最新代码可能不在 DOM 里。
+          // 浏览器窗口本身是隐形的，滚到底不会打扰用户，但能让虚拟列表把最新一段渲染出来，
+          // 后面量 codeLen / textLen 才不会量到一段旧的、静止的内容。
+          try{var vl=document.querySelector('.ds-virtual-list'); if(vl) vl.scrollTop=vl.scrollHeight;}catch(e){}
       var btns=document.querySelectorAll('[role=button],button');
       for(var i=0;i<btns.length;i++){
         var b=btns[i];
@@ -391,7 +396,8 @@ enum Scripts {
       pres=_all;
       out.thinkBlocks=thinkBlocks;
       var total=0;
-      for(var j=0;j<pres.length;j++){ total+=(pres[j].textContent||'').length; }
+      // 只量基线之后的块：第二轮时页面上还挂着第一轮的脚本，全量相加会虚报到九万多字
+      for(var j=Math.min(\#(baseBlocks),pres.length);j<pres.length;j++){ total+=(pres[j].textContent||'').length; }
       out.pres=pres.length;
       out.codeLen=total;
       out.blocks=pres.length;
@@ -465,6 +471,7 @@ enum Scripts {
       return JSON.stringify(out);
     })()
     """#
+    }
 
     /// 点「继续生成」
     /// 关键：不用 element.click()（事件 isTrusted=false，且部分框架监听的是 pointerdown），

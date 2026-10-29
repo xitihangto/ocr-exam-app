@@ -902,9 +902,13 @@ struct ContentView: View {
     ///    用户一眼知道含答案那份已经好了，纯考卷是额外加的，不是替代。
     /// 2. 点压暗层 / Esc / 「不用了」三个都是放弃，行为一致 —— 不要出现「点外面关了但没记日志」。
     private func plainOfferOverlay(_ offer: PlainOffer) -> some View {
-        ZStack(alignment: .top) {
+        // 蒙版必须顶到窗口上沿（和 LogPanel 一个位置）。这里以前写的是
+        // `.frame(maxWidth: .infinity, maxHeight: .infinity)`，没给 alignment，
+        // SwiftUI 默认按 center 摆 —— 548 的蒙版被垂直居中到窗口中间，
+        // 于是它上沿离窗口顶空了 118pt，下沿一路压到 666pt，正好把底部 Word 卡
+        // 从中间切开（「Word 转录」标题被压暗、下载按钮没压暗，中间一条硬边）。
+        ZStack {
             Color.black.opacity(0.28)
-                .frame(height: 548)
                 .contentShape(Rectangle())
                 .onTapGesture { state.declinePlainPaper() }
 
@@ -951,12 +955,14 @@ struct ContentView: View {
                 }
                 .padding(.top, 3)
             }
-            .frame(width: 400)
+            .frame(width: 480)
             .padding(20)
             .trialGlassCard(cornerRadius: 14, shadowOpacity: 0.18, shadowRadius: 14)
-            .padding(.top, 186)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // 蒙版高度与 LogPanel 的 scrimHeight 一致，卡片在蒙版里自动居中 ——
+        // 不再写死 padding(.top, 186)，改文案也不会把卡片顶偏。
+        .frame(height: 548)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     // MARK: 标题
@@ -2612,7 +2618,9 @@ struct LogPanel: View {
                 .contentShape(Rectangle())
                 .onTapGesture { onClose() }
 
-            card.padding(.top, 20)
+            // 卡片贴着蒙版铺满：上下各留 4px。以前 padding 是 20，卡片只有 516 高，
+            // 窗口 720 减去 548 的蒙版后，卡片下面还剩 184px 的空 —— 看着像"飘在上面"。
+            card.padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
@@ -2623,7 +2631,7 @@ struct LogPanel: View {
             Divider()
             logList
         }
-        .frame(width: 566, height: 516)
+        .frame(width: 566, height: 540)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
             .fill(Color(nsColor: .windowBackgroundColor)))
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))

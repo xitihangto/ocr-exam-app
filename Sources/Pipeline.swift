@@ -598,7 +598,7 @@ extension AppState {
                 throw BridgeError.failed("已中止")
             }
 
-            let raw = try self.js(Scripts.replyState)
+            let raw = try self.js(Scripts.replyState(baseBlocks: baseBlocks))
             guard let data = raw.data(using: .utf8),
                   let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
                 Thread.sleep(forTimeInterval: 2.0)
