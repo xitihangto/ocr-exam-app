@@ -93,6 +93,15 @@ cd ocr-exam-app
 
 当前版本：**v0.1**（首个可跑通版本：单槽位批量上传、试卷规则 md、紫色图标、紫色主题）。
 
-仓库：**目前只在本地 git，没有远程**。用户定：初步成熟可用、并且他明确下令之后，才推 GitHub 出 Release。
+仓库：<https://github.com/xitihangto/ocr-exam-app>
+
+推 `v*` 标签会由 GitHub Actions 自动构建并发布 Release，成品可直接下载，不用自己编译：
+
+```bash
+curl -L --fail -o ~/Downloads/ExamOCR-v0.1.zip \
+  https://github.com/xitihangto/ocr-exam-app/releases/download/v0.1/ExamOCR-v0.1.zip
+```
+
+用 `curl` 下载不会被打上隔离属性，也就不会弹 Gatekeeper；装新版前记得先彻底退出旧 App。
 
 更详细的开发交接、结构说明、与两个前作的差异，见工程里的 `HANDOVER.md`。
