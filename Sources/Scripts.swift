@@ -290,7 +290,11 @@ enum Scripts {
       for(var i=btns.length-1;i>=0;i--){
         var b=btns[i];
         var l=(b.getAttribute('aria-label')||'')+' '+(b.innerText||'');
-        if(/发送|send/i.test(l)&&!b.disabled&&b.offsetParent!==null){b.click();return 'CLICK';}
+        if(!/发送|send/i.test(l)||b.disabled) continue;
+        // offsetParent 判不出 position:fixed（输入区是吸底的），改用尺寸判断。
+        var _rc=b.getBoundingClientRect();
+        if(_rc.width<1||_rc.height<1) continue;
+        b.click();return 'CLICK';
       }
       var ta=document.querySelector('textarea');
       if(ta){
@@ -328,7 +332,12 @@ enum Scripts {
       var btns=document.querySelectorAll('[role=button],button');
       for(var i=0;i<btns.length;i++){
         var b=btns[i];
-        if(b.offsetParent===null) continue;
+        // 不能用 offsetParent===null 判隐藏：position:fixed 的元素 offsetParent 也是 null。
+        // 漏掉「停止」按钮 → generating 一直 false → 以为没在生成，提前点继续把生成掐死。
+        var _st=getComputedStyle(b);
+        if(_st.display==='none'||_st.visibility==='hidden'||parseFloat(_st.opacity||'1')<0.1) continue;
+        var _rc=b.getBoundingClientRect();
+        if(_rc.width<1||_rc.height<1) continue;
         var raw=((b.getAttribute('aria-label')||'')+' '+(b.getAttribute('title')||'')+' '+(b.innerText||''));
         var t=raw.replace(/\s+/g,'');
         if(!t) continue;
@@ -427,7 +436,11 @@ enum Scripts {
       var all=document.querySelectorAll('button,[role=button],a');
       for(var i=0;i<all.length;i++){
         var b=all[i];
-        if(b.offsetParent===null) continue;
+        // 同 probeComposer：offsetParent 判不出 position:fixed 的元素，改用尺寸判断。
+        var _st=getComputedStyle(b);
+        if(_st.display==='none'||_st.visibility==='hidden'||parseFloat(_st.opacity||'1')<0.1) continue;
+        var _rc=b.getBoundingClientRect();
+        if(_rc.width<1||_rc.height<1) continue;
         var t=(b.innerText||'').replace(/\s+/g,'').trim();
         if(!t || t.length>8) continue;
         if(/^(继续|继续生成|继续回复|继续输出)$/.test(t) || /^continue$/i.test(t)) cands.push(b);
@@ -534,9 +547,12 @@ enum Scripts {
       var all=document.querySelectorAll('button,[role=button]');
       for(var i=0;i<all.length;i++){
         var b=all[i];
-        if(b.offsetParent===null) continue;
         var cs=getComputedStyle(b);
-        if(cs.visibility==='hidden'||parseFloat(cs.opacity||'1')<0.1) continue;
+        // 不能用 offsetParent===null 判隐藏：position:fixed 的元素 offsetParent
+        // 同样是 null，会把吸附在底部的按钮误判成不存在。改用 display + 实际尺寸。
+        if(cs.display==='none'||cs.visibility==='hidden'||parseFloat(cs.opacity||'1')<0.1) continue;
+        var r0=b.getBoundingClientRect();
+        if(r0.width<1||r0.height<1) continue;
         // 2026-10-29 用户 DevTools 实测：这个按钮是
         //   <div role="button" class="ds-button …"><span class="ds-button__content">继续生成</span></div>
         // 文字装在 ds-button__content 里，读它比读整个 innerText 稳（不会被图标等子元素干扰）。
@@ -592,27 +608,46 @@ enum Scripts {
     })()
     """#
 
-    /// 只判断「继续」按钮还在不在 —— 不滚动、不点击、无副作用。
+    /// 只判断「刚点过的那个继续按钮」还在不在 —— 不滚动、不点击、无副作用。
     ///
     /// 用途：判断上一次点击到底有没有被页面接受。用户 2026-10-29 实测——
     /// 手点下去按钮**瞬间消失**，绝不会变成「停止」，所以「按钮还在不在」
     /// 比「12 秒内有没有涨字」可靠得多（AI 点完要先想十几秒才出字）。
-    static let probeContinue = #"""
-    (function(){
-      var all=document.querySelectorAll('button,[role=button]');
-      for(var i=0;i<all.length;i++){
-        var b=all[i];
-        if(b.offsetParent===null) continue;
-        var st=getComputedStyle(b);
-        if(st.visibility==='hidden'||parseFloat(st.opacity||'1')<0.1) continue;
-        var c=b.querySelector('.ds-button__content');
-        var t=((c?c.innerText:b.innerText)||'').replace(/\s+/g,'').trim();
-        if(!t||t.length>8) continue;
-        if(/^(继续|继续生成|继续回复|继续输出)$/.test(t)||/^continue$/i.test(t)) return 'YES';
-      }
-      return 'NO';
-    })()
-    """#
+    ///
+    /// ⚠️ 2026-10-29 修掉一处判据不一致：原来只要页面上**任意一个**「继续生成」
+    /// 按钮存在就返回 YES，而 `locateContinue` 是按 top 降序取**最靠下**（最新）
+    /// 的那个去点。历史消息里如果还留着旧的「继续生成」按钮（DOM 没清掉），
+    /// 点完当前按钮后 probe 依然能看到那个旧按钮 → 误判成「点击被吞」→
+    /// 攒够 2 次直接抛「AI 停下来之后没有继续写」。
+    /// 现在只认**原来那个位置**（点击时的视口 y ±40px）上的按钮。
+    /// `nearY` 为 nil 时退化成「任意位置存在即算」—— 只在拿不到点击坐标
+    /// （走 JS 兜底点击）时才会发生。
+    static func probeContinue(nearY: Double?) -> String {
+        let nearFilter = nearY.map {
+            "if(Math.abs((r.top+r.height/2)-\($0))>40) continue;"
+        } ?? ""
+        return """
+        (function(){
+          var all=document.querySelectorAll('button,[role=button]');
+          for(var i=0;i<all.length;i++){
+            var b=all[i];
+            var st=getComputedStyle(b);
+            // 不能用 offsetParent===null 判隐藏：position:fixed 的元素 offsetParent
+            // 同样是 null，会把吸附在底部的按钮误判成不存在。改用 display + 实际尺寸。
+            if(st.display==='none'||st.visibility==='hidden'||parseFloat(st.opacity||'1')<0.1) continue;
+            var r=b.getBoundingClientRect();
+            if(r.width<1||r.height<1) continue;
+            var c=b.querySelector('.ds-button__content');
+            var t=((c?c.innerText:b.innerText)||'').replace(/\\s+/g,'').trim();
+            if(!t||t.length>8) continue;
+            if(!(/^(继续|继续生成|继续回复|继续输出)$/.test(t)||/^continue$/i.test(t))) continue;
+            \(nearFilter)
+            return 'YES';
+          }
+          return 'NO';
+        })()
+        """
+    }
 
     /// 把 Swift 字符串安全地塞进 JS 源码里（转义引号、换行、反斜杠、emoji 都能过）
     private static func jsString(_ s: String) -> String {

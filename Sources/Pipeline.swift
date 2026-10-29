@@ -563,10 +563,13 @@ extension AppState {
                     // 日志证据：有一次点了正好 12.0 秒才出字（卡在 6 次轮询的边界上），
                     // 再慢半秒就会被判成无效、多点一次 —— 而多点会把生成掐死（上次的坑）。
                     // 点击被接受 ≠ 立刻出字，AI 点完「继续」要先重新想十几秒。
+                    //
+                    // probeY：只认刚点的那个位置，别把历史消息残留的旧按钮算进来。
+                    let probeY = self.clickedY(from: r)
                     var buttonGone = false
                     for _ in 0..<3 {
                         Thread.sleep(forTimeInterval: 0.2)
-                        if let gone = try? self.continueButtonGone(), gone {
+                        if let gone = try? self.continueButtonGone(nearY: probeY), gone {
                             buttonGone = true
                             break
                         }
@@ -575,12 +578,20 @@ extension AppState {
                     if buttonGone {
                         log("按钮已消失，点击被页面接受")
                         // 点击成功后就安心等它出字。实测最长 12 秒以上，这里给 24 秒。
+                        //
+                        // ⚠️ 不能干等满 24 秒：AI 有时只写两三百字就又截断，
+                        // 「继续」按钮几秒内会重新出现。死等只会白耗时间，
+                        // 所以 6 秒后开始顺带盯按钮，一冒出来就提前交回外层循环再点。
                         var grew = false
                         for attempt in 0..<12 {
                             Thread.sleep(forTimeInterval: 2.0)
                             if let now = try? self.textLength(), now > before {
                                 grew = true
                                 log("继续生效（约 \(2 * (attempt + 1)) 秒后开始出字，涨了 \(now - before) 字）")
+                                break
+                            }
+                            if attempt >= 2, let back = try? self.continueButtonGone(nearY: probeY), !back {
+                                log("按钮又出现了（等了 \(2 * (attempt + 1)) 秒没出字），AI 又停住了，交给下一轮再催")
                                 break
                             }
                         }
@@ -731,9 +742,25 @@ extension AppState {
     }
 
     /// 「继续」按钮还在不在（只探测，不滚动、不点击、无副作用）
-    private func continueButtonGone() throws -> Bool {
-        let raw = try self.js(Scripts.probeContinue)
+    ///
+    /// `nearY` 是刚才点击时的视口 y。只检查这个位置附近的按钮，
+    /// 避免历史消息里残留的旧「继续生成」被当成「按钮还在」。
+    private func continueButtonGone(nearY: Double?) throws -> Bool {
+        let raw = try self.js(Scripts.probeContinue(nearY: nearY))
         return raw.trimmingCharacters(in: .whitespacesAndNewlines) == "NO"
+    }
+
+    /// 从 `REAL_MOUSE(123,456)` 里取出点击时的 y 坐标
+    private func clickedY(from result: String) -> Double? {
+        let prefix = "REAL_MOUSE("
+        guard result.hasPrefix(prefix) else { return nil }
+        guard let close = result.firstIndex(of: ")") else { return nil }
+        let inner = result[result.index(result.startIndex, offsetBy: prefix.count)..<close]
+        let parts = inner.split(separator: ",")
+        guard parts.count == 2, let y = Double(parts[1].trimmingCharacters(in: .whitespaces)) else {
+            return nil
+        }
+        return y
     }
 
     /// 把页面上的代码块取回来，挑出最像「生成试卷」的那段
