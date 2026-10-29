@@ -115,7 +115,11 @@ BIN="dist/试卷识别.app/Contents/MacOS/ExamOCR"
 
 `--uidemo`（生成中）/ `--uidemo2`（已出成品）/ `--uidemo3`（失败）/
 `--uidemo7`（20 张图，网格撑满）/ `--uidemo8`（等待粘贴 + 超限提示）/ `--uidemo9`（大图预览）/
-`--logdemo`（日志面板）/ `--preview <文件>`（直接打开某文件的预览）
+`--logdemo`（日志面板）/ `--scrolldemo`（先 12 张、2.5 秒后补 3 张，验「加行自动滚到底」）/
+`--preview <文件>`（直接打开某文件的预览）
+
+`--scrolldemo` 会把滚动目标打到 stderr（`[scroll] want=… target=… max=… doc=… vis=…`）——
+stdout 重定向到文件时是全缓冲的，`print` 看不到，所以这条走 `FileHandle.standardError`。
 
 ### 图标
 
@@ -537,6 +541,45 @@ AI 很容易把「我」代入成它自己 —— 「我的环境只有 Python�
 
 **结论：判空行必须先把 `<w:tbl>…</w:tbl>` 整段剔除再数。** 纯考卷规则说的「大题之间一个空行」
 只对正文段落成立，表格内部不适用。
+
+---
+
+## 7.6 预览区滚动条（2026-10-29 21:15，用户第 9 轮）
+
+用户原话：「1. 一下子粘贴或上传或拖入超过 12 个文件，出现滚动条……但是滚动条无法用鼠标左键拖动，
+只能滚轮。2. 本来只有 12 个文件以内，后来又加上几个文件导致大于等于 3 行，需把滚动条自动滚至下方，
+过程 0.5 秒，3 行到 4 行以及后续也以此类推。」
+
+### 1. 滚动条能拖了
+
+病根很直白：自绘的 `Capsule` 挂了 `.allowsHitTesting(false)` —— 点击直接穿到卡片上，只有滚轮能动。
+
+改法：外面套一个 **14pt 宽的透明命中区**（可见条仍是 6pt），挂 `DragGesture(minimumDistance: 0)`，
+按「拇指位移 × (maxOffset / travel)」换算成内容位移，直接写 `NSScrollView` 的
+`contentView.bounds.origin`（见 `PreviewScroller`）。拖动时拇指加深一点（0.45 → 0.62）做反馈。
+
+命中区不能更宽：右边距只有 13pt，再宽就压到最后一列缩略图右上角那个「×」了。
+
+### 2. 加行自动滚到底（0.5 秒）
+
+`.task(id: rowCount)`：行数变大就等一会儿再 `scrollToBottom(animated: true)`，
+`NSAnimationContext` 0.5 秒缓动。**只有变大才滚**，删文件让行数变小不滚。
+
+⚠️ **等待时间是 200ms，不是 60ms**：LazyVGrid 新增一行要等下一次布局，60ms 时量到的
+`documentView` 高度还是旧的（实测 `doc=214`，应为 264），滚到 40pt 就停 ——
+上面那行露一半、新加的那行也露一半。200ms 时量到 `doc=264`，正好滚到 90。
+（这两个数是用 `--scrolldemo` 打 stderr 量出来的。）
+
+兜底：动画结束后（+560ms）如果 `distanceToBottom > 1`，再补滚一次 —— 机器慢或 48 张铺 8 行时
+布局可能比动画还慢，只在这种时候才会多动一下。
+
+### 读 / 写偏移都靠 `NSScrollView`
+
+SwiftUI 侧的 `GeometryReader` / `.frame(in:)` 在本工程**读不到**滚动偏移（§8 有记录），
+所以读写统一走背后的 `NSScrollView`：
+`ScrollOffsetReader` 读（`postsBoundsChangedNotifications`），
+`PreviewScroller` 写（`contentView.animator().setBoundsOrigin`），
+两者共用 `ReaderView.attach()` 里登记的那个句柄。
 
 ---
 

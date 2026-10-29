@@ -616,7 +616,10 @@ struct ContentView: View {
                 return
             }
             // 开发用：--uidemo / --uidemo2 只改界面状态，方便截图检查视觉
-            if CommandLine.arguments.contains("--uidemo") {
+            if CommandLine.arguments.contains("--scrolldemo") {
+                PreviewScroller.debugLog = true
+                state.applyScrollDemo()
+            } else if CommandLine.arguments.contains("--uidemo") {
                 state.applyUIDemo(step: 1)
             } else if CommandLine.arguments.contains("--uidemo2") {
                 state.applyUIDemo(step: 2)
@@ -1285,15 +1288,24 @@ struct Backdrop: View {
 /// 同一套离屏测试里这个方案读到的正好是 90。
 struct ScrollOffsetReader: NSViewRepresentable {
     let onChange: (CGFloat) -> Void
+    /// 顺手把外层 `NSScrollView` 交给控制器 —— 拖滚动条、加行自动滚到底都要写偏移
+    var scroller: PreviewScroller? = nil
 
-    func makeNSView(context: Context) -> NSView { ReaderView(onChange: onChange) }
+    func makeNSView(context: Context) -> NSView {
+        let v = ReaderView(onChange: onChange)
+        v.scroller = scroller
+        return v
+    }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        (nsView as? ReaderView)?.onChange = onChange
+        let v = nsView as? ReaderView
+        v?.onChange = onChange
+        v?.scroller = scroller
     }
 
     final class ReaderView: NSView {
         var onChange: (CGFloat) -> Void
+        var scroller: PreviewScroller?
         private weak var clip: NSView?
 
         init(onChange: @escaping (CGFloat) -> Void) {
@@ -1310,6 +1322,7 @@ struct ScrollOffsetReader: NSViewRepresentable {
 
         private func attach() {
             guard let scroll = enclosingScrollView else { return }
+            scroller?.scrollView = scroll
             let c = scroll.contentView
             clip = c
             c.postsBoundsChangedNotifications = true
@@ -1328,6 +1341,61 @@ struct ScrollOffsetReader: NSViewRepresentable {
     }
 }
 
+/// 预览区的滚动控制器。
+///
+/// 为什么要有它：预览区背后的 `NSScrollView` 是 SwiftUI 自己造的，外面拿不到句柄，
+/// 而「用鼠标拖自绘滚动条」「加了行以后自动滚到底」这两件事都得**写**偏移 ——
+/// 只读（`ScrollOffsetReader`）不够。所以让 Reader 在 attach 的时候顺手把句柄登记进来。
+///
+/// 写偏移用 `contentView.animator().setBoundsOrigin(...)`：`NSClipView` 的滚动本质就是
+/// bounds.origin 变化，改它等价于滚轮滚了一下，`postsBoundsChangedNotifications`
+/// 照样会发通知，自绘滚动条就跟着走了。
+final class PreviewScroller: ObservableObject {
+    weak var scrollView: NSScrollView?
+    static var debugLog = false
+
+    /// 还能往下滚多少（内容高 - 可视高），永远 ≥ 0
+    var maxOffset: CGFloat {
+        guard let s = scrollView, let doc = s.documentView else { return 0 }
+        return max(0, doc.frame.height - s.contentView.bounds.height)
+    }
+
+    /// 滚到内容坐标 y。`animated` 时用 0.5 秒缓动（用户 2026-10-29 第 9 轮第 2 条）。
+    func scroll(to y: CGFloat, animated: Bool) {
+        guard let s = scrollView else { return }
+        let target = min(max(0, y), maxOffset)
+        let point = NSPoint(x: 0, y: target)
+        if PreviewScroller.debugLog {
+            let docH = scrollView?.documentView?.frame.height ?? -1
+            let visH = scrollView?.contentView.bounds.height ?? -1
+            // 走 stderr：stdout 被重定向到文件时是全缓冲的，print 看不到
+            let msg = "[scroll] want=\(y) target=\(target) max=\(maxOffset) doc=\(docH) vis=\(visH)\n"
+            FileHandle.standardError.write(msg.data(using: .utf8) ?? Data())
+        }
+        if animated {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.5
+                ctx.allowsImplicitAnimation = true
+                s.contentView.animator().setBoundsOrigin(point)
+            } completionHandler: { [weak s] in
+                guard let s else { return }
+                s.reflectScrolledClipView(s.contentView)
+            }
+        } else {
+            s.contentView.setBoundsOrigin(point)
+            s.reflectScrolledClipView(s.contentView)
+        }
+    }
+
+    func scrollToBottom(animated: Bool) { scroll(to: maxOffset, animated: animated) }
+
+    /// 离底部还有多远。用来在布局比动画还慢的时候补一次。
+    var distanceToBottom: CGFloat {
+        guard let s = scrollView else { return 0 }
+        return max(0, maxOffset - s.contentView.bounds.origin.y)
+    }
+}
+
 struct UploadCard: View {
     @EnvironmentObject var state: AppState
     let slot: AppState.Slot
@@ -1341,6 +1409,12 @@ struct UploadCard: View {
     @State private var clearHover = false
     /// 预览区当前滚动偏移（自绘滚动条用）
     @State private var scrollOffset: CGFloat = 0
+    /// 预览区滚动控制器（拖滚动条 / 加行自动滚到底要写偏移）
+    @StateObject private var scroller = PreviewScroller()
+    /// 拖动滚动条时按下的那个偏移；松手清空
+    @State private var thumbDragStart: CGFloat?
+    /// 上一次的行数，用来判断「是不是刚加了行」
+    @State private var lastRowCount = 2
     /// 有文件正被拖到卡片上方（拖放高亮用）
     @State private var dropTargeted = false
 
@@ -1631,10 +1705,10 @@ struct UploadCard: View {
             .background(
                 // 探针：直接读外层 NSScrollView 的 contentView.bounds.origin.y。
                 // 阈值内不写，免得每帧都触发重绘。
-                ScrollOffsetReader { y in
+                ScrollOffsetReader(onChange: { y in
                     let value = max(0, y)
                     if abs(scrollOffset - value) > 0.5 { scrollOffset = value }
-                }
+                }, scroller: scroller)
             )
         }
         .frame(maxWidth: .infinity)
@@ -1642,6 +1716,27 @@ struct UploadCard: View {
         // 自绘滚动条：**浮在上面**，不参与布局 —— 所以出现 3 行以上时，
         // 预览格子一个像素都不会被挤小（用户 2026-10-29 第 4 轮第 1 条）。
         .overlay(alignment: .topTrailing) { scrollIndicator }
+        // 加了行就自动滚到底（用户 2026-10-29 第 9 轮第 2 条）：
+        // 12 个以内恒 2 行、不滚动；一旦加过 12 个变成 3 行（以及 3→4、4→5…），
+        // 用户刚放进去的文件就在最下面那一行，得让他看见 —— 0.5 秒滚过去，不要瞬移。
+        //
+        // 用 `.task(id:)` 而不是 `.onChange(of:)`：后者的单参数闭包在 macOS 14 已废弃，
+        // 两参数版又要 14+，而本工程没显式设部署目标。`.task(id:)` 12+ 就能用，
+        // 值一变就取消旧任务、起新的，正好。
+        .task(id: rowCount) {
+            let grew = rowCount > lastRowCount
+            lastRowCount = rowCount
+            guard grew else { return }
+            // 200ms 不是拍脑袋：LazyVGrid 新增一行要等下一次布局，60ms 时量到的
+            // 内容高度还是旧的（实测 doc=214 / 应为 264），滚到 40pt 就停了 ——
+            // 上面那行露一半、新加的那行也露一半。200ms 时量到 doc=264，正好滚到 90。
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            scroller.scrollToBottom(animated: true)
+            // 兜底：机器慢 / 48 张要铺 8 行时，布局可能比 0.5s 的动画还慢。
+            // 动画结束后如果还没到底，再补一次（只在这种时候才会多动一下）。
+            try? await Task.sleep(nanoseconds: 560_000_000)
+            if scroller.distanceToBottom > 1 { scroller.scrollToBottom(animated: true) }
+        }
         // 空框时的一句提示：**在本行居中**（用户 2026-10-29 第一条）。
         // 它只是文案：不挂手势、也不吃点击（allowsHitTesting(false)），
         // 点它跟点框里其他空白处一样，落到框自己的 tap 上。
@@ -1663,6 +1758,11 @@ struct UploadCard: View {
     /// 为什么不用系统滚动条：它的粗细/明暗跟系统设置走，改不了；更麻烦的是
     /// 一旦「始终显示滚动条」被打开，它**会吃掉布局宽度**，3 行以上时把预览格子挤小。
     /// 自绘版是 overlay，永远不占位置，格子尺寸从第一行到最后一行都一样。
+    ///
+    /// 可拖动（用户 2026-10-29 第 9 轮第 1 条）：以前整条挂了 `allowsHitTesting(false)`，
+    /// 鼠标左键点上去直接穿过去落到卡片上，只有滚轮能动 —— 用户要的是「拖」。
+    /// 可见条仍然只有 6pt 宽，但**命中区加宽到 14pt**（右边距那一条本来就是空的），
+    /// 手不用瞄准。拖动时按「拇指位移 → 内容位移」等比换算，直接写 NSScrollView 的偏移。
     @ViewBuilder
     private var scrollIndicator: some View {
         if showsScrollbar {
@@ -1673,14 +1773,40 @@ struct UploadCard: View {
             let maxOffset = max(content - visible, 1)
             let y = min(max(scrollOffset, 0), maxOffset) / maxOffset * travel
 
-            Capsule()
-                .fill(Color.secondary.opacity(0.45))
-                .frame(width: scrollBarWidth, height: thumbH)
-                .offset(y: y)
-                .padding(.trailing, 1)
-                .allowsHitTesting(false)
+            ZStack(alignment: .top) {
+                // 命中区：整条透明的，只有右边这一窄溜
+                Color.clear
+                    .frame(width: scrollHitWidth)
+                    .contentShape(Rectangle())
+
+                Capsule()
+                    .fill(Color.secondary.opacity(thumbDragStart == nil ? 0.45 : 0.62))
+                    .frame(width: scrollBarWidth, height: thumbH)
+                    .offset(y: y)
+                    .allowsHitTesting(false)
+            }
+            .frame(width: scrollHitWidth, height: visible)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let start = thumbDragStart ?? scrollOffset
+                        if thumbDragStart == nil { thumbDragStart = start }
+                        guard travel > 0.5 else { return }
+                        // 拇指走 1pt，内容走 maxOffset/travel pt
+                        let delta = value.translation.height * (maxOffset / travel)
+                        scroller.scroll(to: start + delta, animated: false)
+                    }
+                    .onEnded { _ in thumbDragStart = nil }
+            )
+            .padding(.trailing, 1)
+            .animation(.easeOut(duration: 0.15), value: thumbDragStart == nil)
         }
     }
+
+    /// 滚动条命中区宽度：可见条 6pt，左右各多留 4pt，手不用瞄准。
+    /// 不能更宽 —— 右边距只有 13pt，再宽就压到最后一列缩略图右上角那个「×」了。
+    private let scrollHitWidth: CGFloat = 14
 
     /// 滚动条粗细 / 距框右边的留白。
     /// 用户 2026-10-29 第 6 轮第 2 条：3pt/0.22 → 5pt/0.34 → **6pt/0.45**。

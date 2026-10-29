@@ -1991,6 +1991,26 @@ final class AppState: ObservableObject {
 
     // MARK: - 开发用：界面状态演示
 
+    /// 临时：验证「加了行自动滚到底」。先 12 张（正好 2 行、无滚动条），
+    /// 2.5 秒后补 3 张 → 15 张 = 3 行，应该看到 0.5 秒滚到最下面。
+    /// 验完就删。
+    func applyScrollDemo() {
+        login = LoginStatus(kind: .loggedIn)
+        loginSettled = true
+        progress = ProgressInfo()
+        pollingStopped = true
+        uploads[.paper] = AppState.demoImages(12).enumerated().map {
+            UploadItem(image: $1, name: "剪贴板图片\($0 + 1)")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+            guard let self else { return }
+            let more = AppState.demoImages(3).enumerated().map {
+                UploadItem(image: $1, name: "新加的第\($0 + 1)张")
+            }
+            self.uploads[.paper] = (self.uploads[.paper] ?? []) + more
+        }
+    }
+
     /// `--uidemo` 1=生成中 / 2=已出成品 / 3=失败
     /// 7=大批量图片（20 张，网格已撑满）/ 8=同 7，但处于「等待粘贴」态并弹一条超限提示
     /// 9=单张图片 + 直接打开大图预览
