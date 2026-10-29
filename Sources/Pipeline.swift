@@ -113,6 +113,7 @@ extension AppState {
     ━━ 要求 ━━
     · 其他格式完全不变 —— 字体、字号、页边距、编号位置、填空下划线、插图占位，全部和上一份一致。
     · 删掉所有答案和所有解析；因为删掉它们而留下的空行一并去掉。
+    · 标题里如果有「(解析版)」「(含答案)」「(详解)」这类字样，也一并去掉 —— 这一份既没有答案也没有解析，留着那几个字自相矛盾。
     · 大题与大题之间保留且只保留一个空行，不要多也不要少。
     · 重新从头生成一份完整的 Word，不要读上一份 docx 去删行 —— 代码必须在用户的环境（Python 3.12.15 + python-docx）里独立跑出成品。
     · 直接开始执行，不要反问用户任何问题。有解决不了的地方，就在 Word 末尾生成一段纯蓝色文字说明。
@@ -504,8 +505,8 @@ extension AppState {
 
         try checkStop()
         let prompt = AppState.plainPromptText
+        // fillPrompt 内部已经记过「已填入并回读一致（N 字）」，这里不再重复记
         _ = try fillPrompt(prompt)
-        log("纯考卷提示词已填入（\(prompt.count) 字）")
 
         try checkStop()
         let sent = try self.js(Scripts.sendNow)
@@ -673,7 +674,7 @@ extension AppState {
                          "脚本比较长，AI 会分段写完，这是正常的")
             }
 
-            if looksComplete && !loggedMain {
+            if looksComplete && !loggedMain && blocks > baseBlocks {
                 loggedMain = true
                 let which = hasSaveTail ? "末尾有 .save( 调用" : "末尾有 main() 收尾"
                 log("代码出现收尾标志：\(which)")
