@@ -535,13 +535,21 @@ enum Scripts {
       for(var i=0;i<all.length;i++){
         var b=all[i];
         if(b.offsetParent===null) continue;
-        var t=(b.innerText||'').replace(/\s+/g,'').trim();
+        var cs=getComputedStyle(b);
+        if(cs.visibility==='hidden'||parseFloat(cs.opacity||'1')<0.1) continue;
+        // 2026-10-29 用户 DevTools 实测：这个按钮是
+        //   <div role="button" class="ds-button …"><span class="ds-button__content">继续生成</span></div>
+        // 文字装在 ds-button__content 里，读它比读整个 innerText 稳（不会被图标等子元素干扰）。
+        var c=b.querySelector('.ds-button__content');
+        var t=((c?c.innerText:b.innerText)||'').replace(/\s+/g,'').trim();
         if(!t||t.length>8) continue;
         if(/^(继续|继续生成|继续回复|继续输出)$/.test(t)||/^continue$/i.test(t)) cands.push(b);
       }
       if(!cands.length) return 'NOT_FOUND';
       cands.sort(function(a,b){
-        var sa=a.tagName==='BUTTON'?0:1, sb=b.tagName==='BUTTON'?0:1;
+        // ds-button（DeepSeek 设计系统按钮）优先，其次普通 button，最后其它 role=button
+        var sa=/ds-button/.test(a.className)?0:(a.tagName==='BUTTON'?1:2);
+        var sb=/ds-button/.test(b.className)?0:(b.tagName==='BUTTON'?1:2);
         if(sa!==sb) return sa-sb;
         return b.getBoundingClientRect().top - a.getBoundingClientRect().top;
       });
@@ -597,7 +605,8 @@ enum Scripts {
         if(b.offsetParent===null) continue;
         var st=getComputedStyle(b);
         if(st.visibility==='hidden'||parseFloat(st.opacity||'1')<0.1) continue;
-        var t=(b.innerText||'').replace(/\s+/g,'').trim();
+        var c=b.querySelector('.ds-button__content');
+        var t=((c?c.innerText:b.innerText)||'').replace(/\s+/g,'').trim();
         if(!t||t.length>8) continue;
         if(/^(继续|继续生成|继续回复|继续输出)$/.test(t)||/^continue$/i.test(t)) return 'YES';
       }
