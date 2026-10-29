@@ -401,6 +401,45 @@ ocr-exam-app/
 
 ---
 
+## 8.3 DeepSeek 输入区开关的真实 DOM（2026-10-29 用户 DevTools 实测）
+
+「深度思考」「智能搜索」两个开关是同一套设计系统组件，判据完全一致：
+
+```html
+<!-- 关 -->
+<div tabindex="0" aria-pressed="false"
+     class="f79352dc ds-toggle-button ds-toggle-button--m">
+  <div class="ds-toggle-button__icon">…</div>
+  <span class="_6dbc175">深度思考</span>
+  <div class="ds-focus-ring">…</div>
+</div>
+
+<!-- 开：aria-pressed 变 true，class 多一个 ds-toggle-button--selected -->
+<div tabindex="0" aria-pressed="true"
+     class="f79352dc ds-toggle-button ds-toggle-button--m ds-toggle-button--selected">
+  …
+</div>
+```
+
+三条可用判据，优先级从高到低：
+
+1. **`aria-pressed`**（`true` / `false`）—— 就在 `ds-toggle-button` 那个 div 自己身上，最稳；
+2. **class 里有没有 `ds-toggle-button--selected`** —— 语义化命名（`ds-` 是 DeepSeek 自己的设计系统前缀），
+   比 `f79352dc` 这种哈希类名稳定得多；
+3. 颜色（偏蓝）—— 只在上面两条都失效时兜底。
+
+两个坑：
+
+- **不要用 `[class*="ds-toggle-button"]`**，那会连 `ds-toggle-button__icon`、
+  `ds-toggle-button__label` 这些子元素一起选中。用 `.ds-toggle-button`，只匹配完整的类名 token。
+- **关闭态的修饰符两边不一致**：智能搜索关着时似乎带 `--unselected`，深度思考关着时只有 `--m`。
+  所以**不要拿 `--unselected` 当判据**，只认 `aria-pressed` 和 `--selected`。
+
+代码在 `Scripts.probeComposer` 的 `findExact()`（精确路径）和 `findMode()`（模糊兜底）。
+日志里 `deepVia` / `smartVia` 会写明走的哪条：`class` = 精确命中，`fuzzy` = 退回猜颜色，`none` = 没找到。
+
+---
+
 ## 9. 待办
 
 - [ ] **解析残缺被误判成「本体残缺」**：2026-10-29 第一轮真实识别，卷子中间只是缺了两行
