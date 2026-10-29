@@ -56,8 +56,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 	<key>CFBundleIdentifier</key><string>com.workbuddy.examocr</string>
 	<key>CFBundleExecutable</key><string>ExamOCR</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>1.0</string>
-	<key>CFBundleVersion</key><string>10</string>
+	<key>CFBundleShortVersionString</key><string>1.1</string>
+	<key>CFBundleVersion</key><string>11</string>
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>CFBundleIconFile</key><string>AppIcon</string>
 	<key>CFBundleDevelopmentRegion</key><string>zh-Hans</string>
