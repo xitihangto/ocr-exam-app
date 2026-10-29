@@ -88,8 +88,13 @@ echo "▸ 临时签名"
 # 增量构建时包是上一版留下的：SetFile -a B 会往 bundle 上写 FinderInfo 扩展属性，
 # codesign 见到会报「resource fork, Finder information, or similar detritus not allowed」
 # 直接跳过签名。先清掉扩展属性再签。
+#
+# 而签名一旦被跳过，bundle 只剩 linker-signed，`codesign -dv` 里的 Identifier 会变成
+# 可执行文件名（ExamOCR），不再是 Info.plist 里的 com.workbuddy.examocr ——
+# UserDefaults 和 WKWebView 的 cookie 都是按 Identifier 分域的，后果是偏好读不到、
+# DeepSeek 登录态丢失。所以失败**必须看得见**，不要 2>/dev/null。
 xattr -cr "$APP" 2>/dev/null || true
-codesign --force --sign - --timestamp=none "$APP" 2>/dev/null || echo "  (签名跳过)"
+codesign --force --sign - --timestamp=none "$APP" || echo "  ⚠️ 签名失败（Identifier 会退化成可执行名，UserDefaults 域跟着变）"
 
 # 必须标记为 Bundle，否则 Finder 不显示图标
 SetFile -a B "$APP" 2>/dev/null || echo "  (SetFile 跳过)"

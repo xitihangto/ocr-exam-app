@@ -336,6 +336,7 @@ AI 很容易把「我」代入成它自己 —— 「我的环境只有 Python�
 | Finder 里没图标 | 只有 Dock 有 | `SetFile -a B` 标 bundle |
 | 显示名改 Info.plist 不生效 | 名字还是旧的 | 读的是 `zh-Hans.lproj/InfoPlist.strings` |
 | 截图量尺寸截到全黑 | 亮度 0、找不到边框 | App 里那个**隐形 WKWebView 窗口**也是 layer 0 且 >400×400，会先被 `CGWindowListCopyWindowInfo` 匹配到；取「宽度最接近主窗口 620pt」的那个，不是第一个 |
+| **`codesign` 静默跳过，bundle id 悄悄变了**（本工程 2026-10-29 修） | 构建日志只有一句「(签名跳过)」，看着正常；`codesign -dv` 显示 `flags=0x20002(adhoc,linker-signed)`、`Info.plist=not bound`、`Identifier=ExamOCR` 而不是 `com.workbuddy.examocr` | 增量构建时 `SetFile -a B` 写进去的 FinderInfo 让 codesign 报 `resource fork, Finder information, or similar detritus not allowed`，被 `2>/dev/null` 吞掉就只剩「跳过」。**后果极隐蔽**：`UserDefaults` 和 WKWebView 的 cookie 都按 Identifier 分域 → 偏好读不到、DeepSeek 登录态丢失。修法：签名前 `xattr -cr "$APP"`，**且不要 `2>/dev/null`**。查体：`codesign -dv` 的 `Identifier` 必须等于 `Info.plist` 的 `CFBundleIdentifier`。⚠️ **讲义 / 作文两个 app 克隆时都漏抄了这条**（2026-10-29 才补），说明「照上一份复制」不可靠，新克隆一个 app 后必须逐条核对 build.sh |
 
 **本工程新增的一条**：`AppState` 里删 `syncLegacyURL` 时，容易连带删掉紧邻的
 `pasteFromClipboard`（整块替换的边界没算准）—— 编译报 "has no dynamic member"，先查这个函数还在不在。
