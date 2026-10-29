@@ -504,6 +504,21 @@ struct RotatingGradientBorder: View {
 
 // MARK: - 主界面
 
+/// Word 卡在窗口坐标里的上沿。日志面板要**贴着它**铺 —— 靠量，不靠猜。
+///
+/// 以前 `LogPanel.scrimHeight` 是写死的 548（= 720 - 172，172 是当时估的 Word 卡高度）。
+/// 实际 Word 卡上沿在 577，于是蒙版下沿（548）和 Word 卡之间永远空着 29pt，
+/// 加上卡片自身的 4pt 边距，用户看到的就是一条 34pt 的空带 —— 这就是他两次说
+/// 「日志框距离过远」的真正原因：不是卡片没贴边，是**蒙版高度估错了**。
+/// 状态卡的说明文字换行时 Word 卡会上下浮动十几 pt，写死任何数字都会再错一次。
+private struct WordCardTopKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        let v = nextValue()
+        if v > 0 { value = v }
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var state: AppState
     @State private var showExitConfirm = false
@@ -523,6 +538,17 @@ struct ContentView: View {
     @State private var pasteMonitor: Any?
     /// 鼠标抬起监听器：点框外时退出等待粘贴
     @State private var clickMonitor: Any?
+    /// Word 卡上沿（窗口坐标，由 `WordCardTopKey` 量出来）。0 = 还没量到。
+    @State private var wordCardTop: CGFloat = 0
+
+    /// 压暗层的高度 = **Word 卡的上沿 - 4**（量出来的，见 `WordCardTopKey`）。
+    /// 蒙版下沿和 Word 卡之间只留 4pt，日志卡在蒙版里再上下各留 4 —— 三者叠起来
+    /// 面板下边缘离 Word 卡只有 8pt，视觉上是「贴着」而不是「飘着」。
+    /// 量不到时（首帧、或页面滚到别处导致数字离谱）退回老的 548。
+    private var panelScrimHeight: CGFloat {
+        guard wordCardTop > 300, wordCardTop < 700 else { return 548 }
+        return wordCardTop - 4
+    }
 
     var body: some View {
         ZStack {
@@ -537,6 +563,11 @@ struct ContentView: View {
                     generateButton
                     ProgressCard()
                     WordCard()
+                        .background(GeometryReader { g in
+                            Color.clear.preference(
+                                key: WordCardTopKey.self,
+                                value: g.frame(in: .named("examRoot")).minY)
+                        })
                 }
                 .padding(.horizontal, 22)
                 .padding(.top, 18)
@@ -549,6 +580,8 @@ struct ContentView: View {
             }
         }
         .frame(width: 620, height: 720)
+        .coordinateSpace(name: "examRoot")
+        .onPreferenceChange(WordCardTopKey.self) { wordCardTop = $0 }
         // 标题栏（红绿灯那条）下面的分割线 —— **自己画一条，常驻**（用户 2026-10-29 第 6 轮第 1 条）。
         //
         // 为什么不用系统的 `titlebarSeparatorStyle = .line`：那个属性在本窗口上不生效。
@@ -623,7 +656,7 @@ struct ContentView: View {
             // 运行日志：只压暗上半屏，底部 Word 卡（含「详情」按钮）留出来。
             // 面板绝不能盖住自己的开关 —— 盖住了用户就没法再点一次收起来。
             if state.showLog {
-                LogPanel(onClose: { state.closeLog() })
+                LogPanel(scrimHeight: panelScrimHeight, onClose: { state.closeLog() })
                     .transition(.opacity.combined(with: .scale(scale: 0.985, anchor: .top)))
             }
         }
@@ -648,8 +681,7 @@ struct ContentView: View {
             if let offer = state.plainOffer {
                 plainOfferOverlay(offer)
                     .transition(.opacity)
-            }
-        }
+            }        }
         .overlay(alignment: .top) {
             // 兜底：没指明哪个框的提示才放窗口顶部。上传框相关的提示都落在框中心（见 UploadCard）。
             if state.toastSlot == nil, let toast = state.toast {
@@ -959,9 +991,9 @@ struct ContentView: View {
             .padding(20)
             .trialGlassCard(cornerRadius: 14, shadowOpacity: 0.18, shadowRadius: 14)
         }
-        // 蒙版高度与 LogPanel 的 scrimHeight 一致，卡片在蒙版里自动居中 ——
+        // 蒙版高度跟日志面板共用同一个量出来的值（Word 卡上沿 - 4），卡片在蒙版里自动居中 ——
         // 不再写死 padding(.top, 186)，改文案也不会把卡片顶偏。
-        .frame(height: 548)
+        .frame(height: panelScrimHeight)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
@@ -2598,6 +2630,8 @@ struct WordCard: View {
 ///    窗口本来就是固定 620×720，所以这里直接写死尺寸，不追求自适应。
 struct LogPanel: View {
     @EnvironmentObject var state: AppState
+    /// 压暗层高度，由 `ContentView.panelScrimHeight` 量出来（= Word 卡上沿 - 4）
+    var scrimHeight: CGFloat = 548
     let onClose: () -> Void
 
     /// 复制后 1.6 秒内按钮显示「已复制」，给个明确的反馈
@@ -2605,10 +2639,6 @@ struct LogPanel: View {
 
     private var lines: [String] { state.progressLines }
     private var scriptOutput: String { state.scriptOutput }
-
-    /// 压暗层高度 = 720 - 172。172 是底部留给 Word 卡（标题行 + 说明 + 按钮行）的高度，
-    /// 少留一点就会压到「详情」按钮上。
-    private let scrimHeight: CGFloat = 548
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -2618,8 +2648,7 @@ struct LogPanel: View {
                 .contentShape(Rectangle())
                 .onTapGesture { onClose() }
 
-            // 卡片贴着蒙版铺满：上下各留 4px。以前 padding 是 20，卡片只有 516 高，
-            // 窗口 720 减去 548 的蒙版后，卡片下面还剩 184px 的空 —— 看着像"飘在上面"。
+            // 卡片贴着蒙版铺满：上下各留 4px。
             card.padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -2631,7 +2660,7 @@ struct LogPanel: View {
             Divider()
             logList
         }
-        .frame(width: 566, height: 540)
+        .frame(width: 566, height: max(120, scrimHeight - 8))
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
             .fill(Color(nsColor: .windowBackgroundColor)))
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
