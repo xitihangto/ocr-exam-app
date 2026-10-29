@@ -90,6 +90,16 @@ enum Scripts {
       function labelOf(b){
         return compact((b.getAttribute('aria-label')||'')+' '+(b.getAttribute('title')||'')+' '+(b.innerText||b.textContent||''));
       }
+      // 沿元素和祖先找 aria-pressed，返回 true / false / null（没找到）
+      function pressedOf(el){
+        var cur=el;
+        for(var i=0;i<4&&cur;i++,cur=cur.parentElement){
+          var v=(cur.getAttribute('aria-pressed')||'').toLowerCase();
+          if(v==='true') return true;
+          if(v==='false') return false;
+        }
+        return null;
+      }
       function isActive(b){
         var chain=[], current=b;
         for(var up=0;current&&up<4;up++,current=current.parentElement) chain.push(current);
@@ -123,7 +133,28 @@ enum Scripts {
         }
         return el;
       }
+      // 【精确路径】2026-10-29 用户从 DevTools 实测确认：DeepSeek 的模式开关是设计系统
+      // 组件，开关本体 class 里带 ds-toggle-button（语义化命名，不是哈希），状态写在
+      // aria-pressed（true/false）和 ds-toggle-button--selected / --unselected 上。
+      // 直接按类名找、直接读属性，比「扫全页找文字 + 往上爬 4 层猜颜色」准得多。
+      // 注意：.ds-toggle-button 只匹配这一个 class token，不会误中 __icon / __label。
+      function findExact(name){
+        var list=document.querySelectorAll('.ds-toggle-button');
+        for(var i=0;i<list.length;i++){
+          var t=compact(list[i].innerText||list[i].textContent||'');
+          if(t.indexOf(name)<0) continue;
+          var on=pressedOf(list[i]);
+          if(on===null) on=/ds-toggle-button--selected/.test(list[i].className||'');
+          var r=list[i].getBoundingClientRect();
+          return {found:true,on:on,via:'class',
+                  rect:(r.width>0&&r.height>0?{x:r.left+r.width/2,y:r.top+r.height/2}:null)};
+        }
+        return null;
+      }
       function findMode(name){
+        var exact=findExact(name);
+        if(exact) return exact;
+        // 【兜底路径】类名改版时还能用：扫全页文字匹配 + 三重模糊判断（属性 / class / 偏蓝）
         var nodes=document.querySelectorAll('button,[role=button],span,div,label,a'), best=null, score=-1;
         for(var i=0;i<nodes.length;i++){
           var text=labelOf(nodes[i]);
@@ -132,9 +163,9 @@ enum Scripts {
           var s=(text===name ? 10000 : 100)-Math.min(text.length,80);
           if(s>score){best=nodes[i];score=s;}
         }
-        if(!best) return {found:false,on:false,rect:null};
+        if(!best) return {found:false,on:false,rect:null,via:'none'};
         var target=clickTarget(best), r=target.getBoundingClientRect();
-        return {found:true,on:isActive(best)||isActive(target),
+        return {found:true,on:isActive(best)||isActive(target),via:'fuzzy',
                 rect:(r.width>0&&r.height>0?{x:r.left+r.width/2,y:r.top+r.height/2}:null)};
       }
       var deep=findMode('深度思考');
@@ -142,7 +173,8 @@ enum Scripts {
       return JSON.stringify({textarea:!!ta,fileInputs:fi.length,sendLabel:send,
                              deepThink:deep.on,smartSearch:smart.on,
                              deepThinkFound:deep.found,smartSearchFound:smart.found,
-                             deepThinkRect:deep.rect,smartSearchRect:smart.rect});
+                             deepThinkRect:deep.rect,smartSearchRect:smart.rect,
+                             deepVia:deep.via,smartVia:smart.via});
     })()
     """#
 
