@@ -423,18 +423,11 @@ final class AppState: ObservableObject {
         return f
     }()
 
-    /// 运行日志落盘的位置：`~/Library/Logs/试卷识别/运行日志.log`
+    /// 运行日志只留在内存里（`progressLines`），**不落盘**。
     ///
-    /// 面板里的文字选中不了、也复制不出来，出了问题没法贴给别人看。
-    /// 每轮开跑时被覆盖，所以文件里永远是**最近一轮**的完整日志。
-    static var logFileURL: URL? {
-        guard let lib = FileManager.default.urls(for: .libraryDirectory,
-                                                 in: .userDomainMask).first else { return nil }
-        let dir = lib.appendingPathComponent("Logs/试卷识别", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("运行日志.log")
-    }
-
+    /// 2026-10-29 用户定（正式版 v1.0）：取消日志的显性存储，
+    /// 不再往用户机器上写 `~/Library/Logs/试卷识别/运行日志.log` 这类文件。
+    /// 排查时用面板里的「复制全部」把文字贴出来，够用。
     func log(_ line: String) {
         if Thread.isMainThread {
             let now = Date()
@@ -445,9 +438,6 @@ final class AppState: ObservableObject {
             lastLogAt = now
             progressLines.append("\(prefix) \(line)")
             if progressLines.count > 400 { progressLines.removeFirst(200) }
-            if let url = Self.logFileURL {
-                try? progressLines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
-            }
         } else {
             DispatchQueue.main.async { self.log(line) }
         }
@@ -714,16 +704,16 @@ final class AppState: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: item)
     }
 
-    /// **测试期开关**：登录后把「深度思考」「智能搜索」强行关掉。
+    /// 测试期开关：登录后把「深度思考」「智能搜索」强行关掉。
     ///
-    /// 用户 2026-10-29 要求：「先把搜索和思考彻底关闭，让它必须分段」。
-    /// 目的是把「点继续」这条路径逼出来、反复验证 —— 开着思考时往往一次写完，
-    /// 分段的逻辑就永远测不到。
+    /// **2026-10-29 正式版 v1.0 起恢复为 `false`** —— 和文章批改 / 讲义保持一致，
+    /// 两个开关都强行打开（用户要求「回复智能搜索和深度思考」）。
     ///
-    /// 正式发布前改成 `false` 即恢复「强行开启」，和文章批改 / 讲义保持一致。
-    /// （历史实测：关掉后单次输出上限变小，一份卷子切 4 段、点 4 次继续、125 秒；
-    ///  开着时一次写完 101 秒。所以这个开关只该在测试期用。）
-    static let forceModesOffWhileTesting = true
+    /// 历史背景：测「点继续」那条路径时曾设成 `true`，故意关掉思考逼 AI 分段 ——
+    /// 开着思考时往往一次写完，分段逻辑永远测不到。代价是单次输出上限变小：
+    /// 关掉后一份卷子切 4 段、点 4 次继续、125 秒；开着时一次写完 101 秒。
+    /// **所以这个开关只该在测试期用，正式版必须是 `false`。**
+    static let forceModesOffWhileTesting = false
 
     /// 登录成功后，把深度思考 + 智能搜索调整到目标状态。
     /// 目标状态由 `forceModesOffWhileTesting` 决定：测试期关掉，平时打开。
@@ -1530,11 +1520,11 @@ final class AppState: ObservableObject {
     /// 一律只在这个面板里看 —— 所以 `progressLines` 是唯一的日志出口。
     @Published var showLog = false
 
-    /// **测试期开关**：每次开始识别时自动把运行日志展开，不用再点「详情」。
+    /// 测试期开关：每次开始识别时自动把运行日志展开，不用再点「详情」。
     ///
-    /// 用户 2026-10-29 要求「测试阶段把日志放在显眼处」，正式发布前改回 `false`
-    /// 就恢复成「只有点详情才出现」。见 HANDOVER 待办里那一条。
-    static let autoOpenLogWhileTesting = true
+    /// **2026-10-29 正式版 v1.0 起改回 `false`** —— 恢复成「只有点详情才出现」。
+    /// 测试期设 `true` 是为了不用每次手动展开（用户要求「测试阶段把日志放在显眼处」）。
+    static let autoOpenLogWhileTesting = false
 
     func openLog() {
         guard !showLog else { return }
