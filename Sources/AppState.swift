@@ -72,6 +72,13 @@ enum DocxState: Equatable {
     var url: URL? { if case .ready(let u) = self { return u }; return nil }
 }
 
+/// 「要不要顺便生成纯考卷」的询问。答案 ≥ 5 处时出现。
+struct PlainOffer: Identifiable, Equatable {
+    var id = UUID()
+    /// 这份 Word 里段首「答案」出现了几次，直接写进弹窗正文
+    var answerCount: Int
+}
+
 /// 上传框里的一张预览卡片（v0.18 界面改版引入）。
 /// 一个框里可以放「若干个文档」或「若干张图片」，但不能混放，
 /// 数量上限见 `AppState.limits(for:)`。
@@ -339,6 +346,25 @@ final class AppState: ObservableObject {
             if case .failed(let why) = docx { log("✗ 生成失败：\(why)") }
         }
     }
+
+    /// 第二轮产物：不带答案和解析的纯考卷。`.idle` = 没有这一份，卡片保持单按钮。
+    @Published var plainDocx: DocxState = .idle {
+        didSet {
+            if case .failed(let why) = plainDocx { log("✗ 纯考卷生成失败：\(why)") }
+        }
+    }
+
+    /// 非空时弹出「要不要顺便生成纯考卷」。用户点「不用了」或点了生成都会清掉。
+    @Published var plainOffer: PlainOffer?
+
+    /// 本轮结束时页面上有几个代码块。第二轮（纯考卷）拿它当基线，
+    /// 只认这个数之后的代码块 —— 否则会把第一轮的脚本当成第二轮的抓走。
+    /// 不加 @Published：界面不显示它，只是两轮之间的内部状态。
+    var lastReplyBlocks = 0
+
+    /// 第一轮生成时定下的时间戳，两份文件名共用 —— 用户要求「一眼能对上」。
+    /// 不能在下拉时各取一次 Date()，那样两份可能跨分钟，就对不上了。
+    var docxStamp = ""
     /// 用户点了「中止」
     @Published var stopRequested = false
 
@@ -1659,9 +1685,28 @@ final class AppState: ObservableObject {
                 }
                 if let stored = self.storeProduced(docs) {
                     self.docx = .ready(stored)
+                    self.plainDocx = .idle          // 新的一份成品，纯考卷状态清零
+                    self.plainOffer = nil
+                    self.docxStamp = Self.stampNow()  // 两份共用一个时间戳，文件名一眼能对上
                     self.discardHeldFiles()       // 成功了就不再需要"放回去"，剪贴板图片也一并清掉
-                    self.say("Word 试卷生成好了 ✓", detail: "在下面点「下载 Word 试卷」保存到电脑里",
+                    self.say("Word 转录生成好了 ✓", detail: "在下面点「下载 Word 文件」保存到电脑里",
                              running: false, tone: .ok)
+
+                    // 数「答案」—— 放后台，几十毫秒，不占主线程。
+                    // 5 处以上才值得问：少量「答案」多半是题干里顺带提到的词，
+                    // 而且高三英语卷大多整份英文，除了 guided writing / 翻译题干里会出现中文。
+                    DispatchQueue.global(qos: .utility).async {
+                        let n = AppState.countAnswerHeads(in: stored)
+                        DispatchQueue.main.async {
+                            self.log("Word 里段首「答案」共 \(n) 处")
+                            if n >= 5 {
+                                self.log("≥5 处，问用户要不要顺便生成纯考卷")
+                                self.plainOffer = PlainOffer(answerCount: n)
+                            } else {
+                                self.log("不足 5 处，不提供纯考卷")
+                            }
+                        }
+                    }
                 } else {
                     self.docx = .failed("无法保存产物")
                     self.restoreHeldFiles()
@@ -1677,19 +1722,169 @@ final class AppState: ObservableObject {
         return files.first
     }
 
-    /// 点「下载 Word 试卷」：弹系统面板选位置
-    func downloadDocx() {
-        guard let src = docx.url else { return }
+    // MARK: - 第二轮：纯考卷
+
+    /// 用户在弹窗上点了「不用了」。只记一笔日志 —— 用户 19:45 定：不做反悔入口，
+    /// 事后想要纯考卷只能重跑整份卷子。
+    func declinePlainPaper() {
+        guard plainOffer != nil else { return }
+        log("用户选了「不用了」，不生成纯考卷")
+        plainOffer = nil
+    }
+
+    /// 用户点了「生成纯考卷」：在同一对话里发第二轮，产出一份不带答案和解析的卷子。
+    ///
+    /// 设计前提（用户 2026-10-29 19:45 定）：
+    /// · 第一轮的 `docx` 全程不动 —— 纯考卷成不成都不能影响它下载
+    /// · 失败不重试、不弹窗，只记日志（用户原话「失败就失败，到时候再改代码」）
+    /// · 中止复用现有「中止」按钮，`stopRequested` 一起清
+    func generatePlainPaper() {
+        plainOffer = nil
+        guard case .ready = docx else {
+            log("没有可用的第一轮成品，不生成纯考卷")
+            return
+        }
+        guard !plainDocx.isBuilding, !plainDocx.isReady else { return }
+
+        plainDocx = .building
+        isRunning = true
+        stopRequested = false
+        log("开始生成纯考卷：基线代码块 \(lastReplyBlocks) 个")
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            let token = ProcessInfo.processInfo.beginActivity(
+                options: [.userInitiated, .idleSystemSleepDisabled],
+                reason: "等待 DeepSeek 生成纯考卷")
+            defer { ProcessInfo.processInfo.endActivity(token) }
+
+            var script: String?
+            var failure: String?
+            do {
+                script = try self.pipelinePlain(baseBlocks: self.lastReplyBlocks)
+            } catch {
+                failure = error.localizedDescription
+                self.log("✗ 纯考卷：\(failure ?? "")")
+            }
+            DispatchQueue.main.async {
+                self.isRunning = false
+                if let failure = failure {
+                    let aborted = failure.contains("已中止")
+                    self.plainDocx = aborted ? .idle : .failed(failure)
+                    self.say(aborted ? "已中止" : "纯考卷没生成出来",
+                             detail: aborted
+                                ? "含答案的那份还在，可以照常下载"
+                                : "含答案的那份不受影响，可以照常下载；原因见「详情」",
+                             running: false,
+                             tone: aborted ? .idle : .error)
+                    return
+                }
+                guard let script = script, !script.isEmpty else {
+                    self.plainDocx = .failed("AI 回答完了，但没找到脚本")
+                    self.say("纯考卷没生成出来",
+                             detail: "AI 回答完了，但没找到脚本。含答案的那份不受影响",
+                             running: false, tone: .error)
+                    return
+                }
+                self.runPlainScript(script)
+            }
+        }
+    }
+
+    /// 跑第二轮的脚本。和 `runScript` 的区别只有三处：
+    /// 产物写进 `plainDocx`、失败时**不动**第一轮的 `docx`、不把文件放回上传框。
+    private func runPlainScript(_ code: String) {
+        let cleaned = ScriptExtractor.normalize(code)
+        guard cleaned.count > 40 else {
+            plainDocx = .failed("脚本内容太短，像是没生成全")
+            say("纯考卷没生成出来", detail: "脚本内容太短，像是没生成全", running: false, tone: .error)
+            return
+        }
+        isRunning = true
+        scriptOutput = ""
+        say("正在把纯考卷排成 Word…", detail: "大约需要几十秒", running: true)
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            var payload: RunResult?
+            var failure: String?
+            do {
+                payload = try PythonRunner.run(script: cleaned)
+            } catch {
+                failure = error.localizedDescription
+            }
+
+            DispatchQueue.main.async {
+                self.isRunning = false
+                if let failure = failure {
+                    self.plainDocx = .failed(failure)
+                    self.say("纯考卷没生成出来",
+                             detail: "含答案的那份不受影响，可以照常下载",
+                             running: false, tone: .error)
+                    return
+                }
+                guard let result = payload else { return }
+                self.scriptOutput = result.output
+                self.log("纯考卷脚本结束：退出码 \(result.exitCode)，"
+                         + "产出 \(result.producedFiles.count) 个文件")
+                if !result.output.isEmpty {
+                    self.log("纯考卷输出末尾：\(result.output.suffix(300))")
+                }
+
+                if result.cancelled {
+                    self.plainDocx = .idle
+                    self.say("已中止", detail: "含答案的那份还在，可以照常下载", running: false)
+                    return
+                }
+                if result.timedOut {
+                    self.plainDocx = .failed("执行超时（4 分钟）")
+                    self.say("纯考卷生成超时了", detail: "含答案的那份不受影响",
+                             running: false, tone: .error)
+                    return
+                }
+                if result.exitCode != 0 {
+                    self.plainDocx = .failed("脚本报错（退出码 \(result.exitCode)）")
+                    self.say("纯考卷没生成出来",
+                             detail: "含答案的那份不受影响；原因见「详情」",
+                             running: false, tone: .error)
+                    return
+                }
+                let docs = result.producedFiles.filter { $0.pathExtension.lowercased() == "docx" }
+                guard let first = docs.first else {
+                    self.plainDocx = .failed("没有产出 docx")
+                    self.say("纯考卷没生成出来", detail: "脚本跑完了，但没有产出 Word 文件",
+                             running: false, tone: .error)
+                    return
+                }
+                self.plainDocx = .ready(first)
+                self.log("纯考卷已生成：\(first.lastPathComponent)")
+                self.say("纯考卷也生成好了 ✓",
+                         detail: "两份都可以下载，记得都存下来",
+                         running: false, tone: .ok)
+            }
+        }
+    }
+
+    /// 点「下载 Word 文件」：弹系统面板选位置
+    func downloadDocx() { saveDocx(plain: false) }
+
+    /// 点「下载纯考卷」
+    func downloadPlainDocx() { saveDocx(plain: true) }
+
+    /// 两份产物共用一套保存逻辑。`plain` 只决定「读哪个状态、写哪个状态、叫什么名」。
+    ///
+    /// 保存面板固定落在系统「下载」目录，不跟题目文件所在目录走 ——
+    /// 用户预期成品出现在"下载"里；跟着源文件走会让成品散落在各个素材文件夹中。
+    /// 注意：chooseFile（打开面板）仍然记着上次的目录，那是另一回事。
+    private func saveDocx(plain: Bool) {
+        guard let src = (plain ? plainDocx : docx).url else { return }
         let panel = NSSavePanel()
-        panel.title = "保存 Word 试卷"
-        panel.message = "选择试卷存到哪里"
-        panel.nameFieldStringValue = defaultDocxName()
+        panel.title = plain ? "保存纯考卷" : "保存 Word 转录"
+        panel.message = plain ? "选择纯考卷存到哪里" : "选择文件存到哪里"
+        panel.nameFieldStringValue = defaultDocxName(plain: plain)
         if let t = UTType(filenameExtension: "docx") { panel.allowedContentTypes = [t] }
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
-        // 保存面板固定落在系统「下载」目录，不跟题目文件所在目录走。
-        // 用户预期成品出现在"下载"里；跟着源文件走会让成品散落在各个素材文件夹中。
-        // 注意：chooseFile（打开面板）仍然记着上次的目录，那是另一回事。
         panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
 
         guard panel.runModal() == .OK, let dest = panel.url else { return }
@@ -1699,15 +1894,16 @@ final class AppState: ObservableObject {
             try fm.copyItem(at: src, to: dest)
             // 只有真正下载成功才删临时原件：先删文件本身，再把同批的临时工作目录清掉
             // （目录名以“试卷识别-run-”开头、且确实在系统临时目录下才删，防止误删别处文件）。
-            // 删完卡片回到未生成状态，同一个临时文件不会被重复下载第二次。
+            // 删完这一份回到未生成状态，同一个临时文件不会被重复下载第二次。
             try? fm.removeItem(at: src)
             let workDir = src.deletingLastPathComponent()
             if workDir.path.hasPrefix(NSTemporaryDirectory()),
                workDir.lastPathComponent.hasPrefix("试卷识别-run-") {
                 try? fm.removeItem(at: workDir)
             }
-            docx = .idle
-            say("Word 试卷已保存 ✓", detail: dest.path, running: false, tone: .ok)
+            if plain { plainDocx = .idle } else { docx = .idle }
+            say(plain ? "纯考卷已保存 ✓" : "Word 转录已保存 ✓",
+                detail: dest.path, running: false, tone: .ok)
             revealInFinder(dest)
         } catch {
             say("保存失败", detail: error.localizedDescription, running: false, tone: .error)
@@ -1724,10 +1920,16 @@ final class AppState: ObservableObject {
         NSWorkspace.shared.selectFile(file.path, inFileViewerRootedAtPath: folder)
     }
 
-    private func defaultDocxName() -> String {
+    /// 两份共用一个时间戳（第一轮生成时定下的 `docxStamp`），文件名一眼能对上。
+    private func defaultDocxName(plain: Bool = false) -> String {
+        let stamp = docxStamp.isEmpty ? Self.stampNow() : docxStamp
+        return plain ? "试卷-\(stamp)-纯考卷.docx" : "试卷-\(stamp).docx"
+    }
+
+    private static func stampNow() -> String {
         let df = DateFormatter()
         df.dateFormat = "yyyyMMdd-HHmm"
-        return "试卷-\(df.string(from: Date())).docx"
+        return df.string(from: Date())
     }
 
     // MARK: - 开发用：登录流程自检

@@ -95,6 +95,68 @@ extension AppState {
     /// AI 必须在代码末尾打上的结束标记
     static let endMarker = "# ===EXAM-END==="
 
+    /// 第二轮（纯考卷）的结束标记。故意和第一轮分开 —— 日志里一眼能看出卡在哪一轮，
+    /// 判定逻辑两个都认（见 `Scripts.replyState` 的 `hasEndMark`）。
+    static let plainEndMarker = "# ===PLAIN-END==="
+
+    /// 第二轮（纯考卷）的提示词。用户 2026-10-29 19:30 口述、19:45 定稿。
+    ///
+    /// 这一轮**不带任何附件**，靠上下文里已有的两份规则和全部图片工作，所以提示词里
+    /// 不写文件名、不写「附件 N」。三条约束缺一不可：
+    /// · 「不要读上一份 docx 去删行」—— 否则 AI 会写一段打开旧文件、删段落的脚本：
+    ///   格式全丢，而且旧文件的临时路径它根本拿不到
+    /// · 「大题之间只留一个空行」—— 删掉答案后容易留下连续空行，这条把它压回一个
+    /// · 「解决不了就写纯蓝字说明」—— 用户明确要求不反问，把问题留在成品末尾
+    static let plainPromptText = """
+    同一份试卷，再生成一份不带任何答案、也不带任何解析的纯考卷。
+
+    ━━ 要求 ━━
+    · 其他格式完全不变 —— 字体、字号、页边距、编号位置、填空下划线、插图占位，全部和上一份一致。
+    · 删掉所有答案和所有解析；因为删掉它们而留下的空行一并去掉。
+    · 大题与大题之间保留且只保留一个空行，不要多也不要少。
+    · 重新从头生成一份完整的 Word，不要读上一份 docx 去删行 —— 代码必须在用户的环境（Python 3.12.15 + python-docx）里独立跑出成品。
+    · 直接开始执行，不要反问用户任何问题。有解决不了的地方，就在 Word 末尾生成一段纯蓝色文字说明。
+
+    ━━ 收尾 ━━
+    Python 代码的最后一行必须原样写上：
+    # ===PLAIN-END===
+    这一行必须是代码框里的最后一行，它之后不能再有任何代码。这是用户判断代码是否输出完整的标记，务必保留、不要改动、不要省略。
+    """
+
+    /// 数 docx 里「答案」出现在**段首**的次数。
+    ///
+    /// 用户 2026-10-29 19:30 给的判据：他碰到的卷子里「答案」一定在一行开头几个字符内，
+    /// 绝不会换行。所以只看每段去掉首尾空白后的**前 6 个字符** ——
+    /// 「答案：A」「1. 答案：D」「【答案】B」都能命中，题干中间偶然出现的「答案」不算。
+    /// 5 这个阈值就是为题干误判留的余量，不是拍脑袋。
+    ///
+    /// 为什么不用 python-docx 再跑一次：docx 就是 zip，`unzip -p` 取 document.xml 只要几十毫秒，
+    /// 而多起一次 Python 要几百毫秒。剥标签前必须先把 `</w:p>` 换成换行再切段，
+    /// 否则上一段结尾的「答」会和下一段开头的「案」拼成假命中。
+    static func countAnswerHeads(in docx: URL) -> Int {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        task.arguments = ["-p", docx.path, "word/document.xml"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        do { try task.run() } catch { return 0 }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        guard let xml = String(data: data, encoding: .utf8) else { return 0 }
+
+        var text = xml.replacingOccurrences(of: "</w:p>", with: "\n")
+        text = text.replacingOccurrences(of: "<[^>]*>", with: "", options: .regularExpression)
+
+        var count = 0
+        for line in text.split(separator: "\n") {
+            let s = line.trimmingCharacters(in: .whitespaces)
+            guard !s.isEmpty else { continue }
+            if s.prefix(6).contains("答案") { count += 1 }
+        }
+        return count
+    }
+
     private var docxMime: String {
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     }
@@ -138,11 +200,35 @@ extension AppState {
 
     func runPipeline() {
         guard !isRunning else { return }
+
+        // 上一份成品还没下载就拦下来 —— 用户 2026-10-29 19:45 定：
+        // 「原来那个可以下载的 word 不要消失，直到用户点了下载，才可以去生成新的项目」。
+        // 两道闸：含答案那份、纯考卷那份，任意一份还没存到电脑里都不放行
+        // （用户 19:48 追加：纯考卷生成成功时，两个都得下完才解锁）。
+        //
+        // ⚠️ 必须拦在 `submitAndClearUploads()` 之前 —— 它一执行上传框就空了，
+        // 拦在后面等于把用户刚放进去的文件吃掉。
+        if docx.isReady || plainDocx.isReady {
+            let which: String
+            if docx.isReady && plainDocx.isReady { which = "两份" }
+            else if docx.isReady { which = "含答案的那份" }
+            else { which = "纯考卷" }
+            log("拦下新任务：\(which)还没下载")
+            say("上一份还没保存",
+                detail: "先把\(which) Word 下载到电脑里，再开始新的识别",
+                running: false, tone: .error)
+            return
+        }
+
         isRunning = true
         stopRequested = false
         progressLines = []
         lastLogAt = nil          // 新一轮从零计时，别把上一轮的间隔带过来
         docx = .idle
+        plainDocx = .idle
+        plainOffer = nil
+        lastReplyBlocks = 0
+        docxStamp = ""
         // 测试期：开跑就把日志摊开，跑的过程中能一直看着（正式版改成 false）
         if Self.autoOpenLogWhileTesting { openLog() }
 
@@ -392,6 +478,47 @@ extension AppState {
         }
     }
 
+    // MARK: - 第二轮：纯考卷
+
+    /// 在**同一个对话**里再发一次，让 AI 重新生成一份不带答案和解析的纯考卷。
+    ///
+    /// 和第一轮的区别（每一条都是必需的，不是简化）：
+    /// · 不按 ⌘J、不重载 —— 必须留在原对话里，AI 才能参考刚识别出来的内容
+    /// · 不上传任何附件 —— 两份规则和全部图片都已经在上下文里
+    /// · 不碰上传框 —— `submitAndClearUploads` / `restoreHeldFiles` 一律不调，
+    ///   否则会把第一轮已经 discard 掉的文件又"放回"界面
+    /// · 完成判定带 `baseBlocks` 基线，只抓基线之后的代码块
+    ///
+    /// 不加 `private`：调用方在 `AppState.swift`（`generatePlainPaper`），两个文件是两个扩展。
+    func pipelinePlain(baseBlocks: Int) throws -> String? {
+        say("正在让 AI 生成纯考卷…", detail: "在同一个对话里继续，不用重新上传", running: true)
+
+        // 输入框一定在（页面没换过），但页面可能被滚到别处，探一下更稳
+        var ready = 0.0
+        while ready < 10 {
+            let p = (try? self.js(Scripts.probeComposer)) ?? ""
+            if p.contains("\"textarea\":true") { break }
+            Thread.sleep(forTimeInterval: 0.4)
+            ready += 0.4
+        }
+
+        try checkStop()
+        let prompt = AppState.plainPromptText
+        _ = try fillPrompt(prompt)
+        log("纯考卷提示词已填入（\(prompt.count) 字）")
+
+        try checkStop()
+        let sent = try self.js(Scripts.sendNow)
+        log("纯考卷提示词发送结果：\(sent)")
+        if sent == "NO_TARGET" {
+            throw BridgeError.failed("找不到发送按钮")
+        }
+        say("已经让 AI 重新生成纯考卷了",
+            detail: "大约还要 1–3 分钟；含答案的那份随时可以下载",
+            running: true)
+        return try waitForReply(baseBlocks: baseBlocks)
+    }
+
     /// 清空输入框 → 填入提示词 → 回读校验。对不上就再来一次（最多两次）。
     /// 回读这一步是关键：网页插入文件名是异步的，只靠「填完就当成功」会漏。
     /// 返回 true 表示回读与提示词完全一致。
@@ -436,7 +563,12 @@ extension AppState {
 
     /// 轮询回复区，直到内容不再变化；期间自动点「继续」
     /// 注意：点了不算数，必须验证页面内容真的涨了，否则记一次无效
-    private func waitForReply() throws -> String? {
+    ///
+    /// - Parameter baseBlocks: 进入本轮之前页面上已有的代码块数。第一轮是 0；第二轮（纯考卷）
+    ///   传第一轮结束时的块数 —— **所有完成判定都要求 `blocks > baseBlocks`**。
+    ///   不加这道闸，第二轮发出去的第一秒就会看到页面上第一轮那个 `# ===EXAM-END===`，
+    ///   直接判「写完了」，然后把旧脚本抓回来当成纯考卷。
+    private func waitForReply(baseBlocks: Int = 0) throws -> String? {
         // 以前签名上挂了个 `timeout: TimeInterval = 240` 的参数，但函数体压根不读它
         // （直接写死 600），谁想改时长都会白改。2026-10-27 删掉，只留 replyDeadline。
         let deadline = Date().addingTimeInterval(Self.replyDeadline)
@@ -504,16 +636,20 @@ extension AppState {
             // 2026-10-29 用户定：**看到标记只等 3 秒，不要乘 2**。
             // 以前是「连续两轮都在」，而轮间隔受页面变化影响，实测白等 6 秒。
             // 现在固定成：第一次看到 → 睡 3 秒 → 再看一眼还在就收工。
-            if hasEndMark {
+            //
+            // ⚠️ `blocks > baseBlocks` 不能省：第二轮（纯考卷）时页面上还有第一轮的代码块，
+            // 它末尾的结束标记会让这里立刻命中，抓回来的却是上一轮的脚本。
+            if hasEndMark && blocks > baseBlocks {
                 if !endMarkSeen {
                     endMarkSeen = true
-                    log("看到结束标记 # ===EXAM-END===，等 3 秒确认")
+                    log("看到结束标记 # ===EXAM-END=== / # ===PLAIN-END===，等 3 秒确认")
                     Thread.sleep(forTimeInterval: 3.0)
                     continue
                 }
-                log("结束标记仍在，判定写完")
+                log("结束标记仍在，判定写完（本轮共 \(blocks) 个代码块，基线 \(baseBlocks)）")
                 say("脚本写完了", detail: "正在把它取回来…", running: true)
-                return try grabScript()
+                lastReplyBlocks = blocks
+                return try grabScript(skip: baseBlocks)
             } else {
                 endMarkSeen = false
             }
@@ -654,10 +790,11 @@ extension AppState {
 
             // 【主判定】语义信号：脚本出现收尾标志，且代码块后面还有说明文字
             // （结束标记的判定已移到循环顶部，随时都做，这里不再重复计数。）
-            if blocks > 0 && looksComplete && afterLines >= 3 {
+            if blocks > baseBlocks && looksComplete && afterLines >= 3 {
                 log("脚本收尾 + \(afterLines) 行说明，判定写完")
                 say("脚本写完了", detail: "正在把它取回来…", running: true)
-                return try grabScript()
+                lastReplyBlocks = blocks
+                return try grabScript(skip: baseBlocks)
             }
 
             // 【兜底判定】2026-10-25 的教训：旧代码“稳定 10 秒就按完成处理”，
@@ -667,13 +804,14 @@ extension AppState {
             // 2026-10-27 用户定：**不必等 60 秒**。理由是到目前为止结束标志从未失手，
             // 60 秒纯属白等。改成「一轮没长 + 有收尾标志」就收工（循环 3 秒一轮，即约 3 秒）。
             // 仍保留两条底线：① 没有收尾标志时绝不执行，继续等；② 总上限 10 分钟不变。
-            if blocks > 0 {
+            if blocks > baseBlocks {
                 if textLen == lastTextLen && codeLen == lastCodeLen {
                     stableRounds += 1
                     if looksComplete && stableRounds >= 1 {
                         log("内容 3 秒未变且有收尾标志，按完成处理")
                         say("脚本看起来写完了", detail: "正在把它取回来…", running: true)
-                        return try grabScript()
+                        lastReplyBlocks = blocks
+                        return try grabScript(skip: baseBlocks)
                     }
                     // 没有收尾标志：攒够 60 秒（20 轮 × 3 秒）提示一次，然后继续等
                     if stableRounds >= 20 {
@@ -684,11 +822,12 @@ extension AppState {
                     stableRounds = 0
                 }
             } else {
-                // 没有代码块：深度思考先想后写，75 秒太短，放到 180 秒再判“没给脚本”
+                // 没有新代码块：深度思考先想后写，75 秒太短，放到 180 秒再判“没给脚本”
                 let idle = Date().timeIntervalSince(lastChangeAt)
                 if idle > 180 {
                     throw BridgeError.failed(
-                        "页面停住了，但没找到脚本（pre=\(pres) code=\(codes) 字数=\(textLen)）。"
+                        "页面停住了，但没找到脚本（pre=\(pres) code=\(codes) 字数=\(textLen)，"
+                        + "代码块 \(blocks) 个 / 基线 \(baseBlocks)）。"
                         + "可能是 AI 没有输出脚本。")
                 }
                 stableRounds = 0
@@ -791,26 +930,33 @@ extension AppState {
     }
 
     /// 把页面上的代码块取回来，挑出最像「生成试卷」的那段
-    func grabScript() throws -> String? {
+    /// - Parameter skip: 跳过前几个代码块。第一轮传 0；第二轮（纯考卷）传第一轮结束时的块数，
+    ///   否则会把第一轮那份完整脚本一起抓走（见 `Scripts.grabBlocksBuild` 的注释）。
+    func grabScript(skip: Int = 0) throws -> String? {
         // 0. 先看 AI 有没有自己说「看不到图片」。
         // ⚠️ 2026-10-29 复盘：这句话**不能当成事实**。14:29 那轮的思考流里它一边说
         // 「我无法真实地看到图片」，一边写出了原卷里的「复旦附中」标题和 Lhende Khola 洪水那篇
         // —— 它其实看见了，只是深度思考时习惯性自我怀疑（先套「我没有视觉」的常识，再被自己纠正）。
         // 所以这条只当**安全网**：命中就停下问一句，不擅自把内容当成品交出去。
         // 真要判断有没有看见，看草稿里有没有原卷的专有名词，比看这句话可靠。
-        let answer = (try? self.js(Scripts.answerText)) ?? ""
-        if let phrase = Self.blindHint(in: answer) {
-            log("⛔️ AI 的回答里出现「\(phrase)」，无法确认它是否真看到了图片，先不执行")
-            throw BridgeError.failed(
-                "AI 的回答里出现了「\(phrase)」，没法确认它是否真的看到了图片。"
-                + "为免把编出来的内容当成成品，这次先停下不执行。"
-                + "如果图片确实已经传上去了，直接重跑一次即可。")
+        //
+        // 第二轮（纯考卷）跳过这条：那一轮本来就没传图，AI 说的「看不到图片」指的是
+        // 上下文里上一轮的附件，不能因此判定纯考卷不可信。
+        if skip == 0 {
+            let answer = (try? self.js(Scripts.answerText)) ?? ""
+            if let phrase = Self.blindHint(in: answer) {
+                log("⛔️ AI 的回答里出现「\(phrase)」，无法确认它是否真看到了图片，先不执行")
+                throw BridgeError.failed(
+                    "AI 的回答里出现了「\(phrase)」，没法确认它是否真的看到了图片。"
+                    + "为免把编出来的内容当成成品，这次先停下不执行。"
+                    + "如果图片确实已经传上去了，直接重跑一次即可。")
+            }
         }
 
-        let lenRaw = try self.js(Scripts.grabBlocksBuild)
+        let lenRaw = try self.js(Scripts.grabBlocksBuild(skip: skip))
         guard let total = Int(lenRaw.trimmingCharacters(in: .whitespacesAndNewlines)),
               total > 0 else {
-            log("页面上没有找到代码块")
+            log("页面上没有找到代码块" + (skip > 0 ? "（已跳过前 \(skip) 个）" : ""))
             return nil
         }
 

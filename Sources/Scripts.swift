@@ -418,7 +418,9 @@ enum Scripts {
         // 用 clean 判断就永远匹配不上（2026-10-29 实测：一轮 101 秒里白等 6 秒就是它）。
         // ⚠️ 另外这里是 EXAM-END，不是作文版的 ESSAY-END —— 本工程从作文版克隆，
         // 这一行当初漏改过，别再改回去。
-        out.hasEndMark=/#\s*===EXAM-END===/i.test(code.slice(-300));
+        // 2026-10-29 19:45 加 PLAIN-END：纯考卷那轮（第二轮）用的是另一个标记，
+        // 这样日志里一眼能看出卡在哪一轮；判定逻辑两个都认。
+        out.hasEndMark=/#\s*===(EXAM|PLAIN)-END===/i.test(code.slice(-300));
 
         // 收尾标志一：末尾出现 .save(...) 调用（规则要求最后 doc.save，实测 AI 常写 b.save(OUT_NAME)）
         // 括号必须闭合，否则「b.save(OUT_NA」这种写了一半的也会算进来
@@ -555,51 +557,63 @@ enum Scripts {
 
     /// 把所有代码块装进 window.__wbCode（百分号编码），返回总长度
     /// 按 20261025 快照的真实结构：div.md-code-block > pre（无 code 子元素）
-    static let grabBlocksBuild = #"""
-    window.__wbCode=encodeURIComponent((function(){
-      var arr=[];
-      function push(t){
-        t=(t||'').replace(/\r\n/g,'\n');
-        // 剥掉 AI 打的结束标记行，别让它混进要执行的脚本里。
-        // 注意是 EXAM-END：这一行从作文版克隆过来时漏改过，别改回 ESSAY-END。
-        t=t.replace(/\n?[ \t]*#[ \t]*===EXAM-END===[ \t]*$/i,'');
-        t=t.replace(/\s+$/,'');
-        if(t.length>60 && arr.indexOf(t)<0) arr.push(t);
-      }
-      // 思考区里的草稿绝对不能抓（2026-10-29 14:29 抓错过一次，见 replyState 的注释）
-      function _wbIsThinking(el){
-        var n=el, hops=0;
-        while(n && n!==document.body && hops<12){
-          var cls='';
-          try{
-            cls=(n.getAttribute('class')||'')+' '+(n.getAttribute('data-testid')||'')
-                +' '+(n.id||'');
-          }catch(e){}
-          if(/think|reason/i.test(cls)) return true;
-          try{
-            if(n.getAttribute('aria-expanded')!==null){
-              var lbl=(n.getAttribute('aria-label')||'')+' '+(n.getAttribute('title')||'')
-                      +' '+(n.textContent||'').slice(0,24);
-              if(/思考|think|reason/i.test(lbl)) return true;
+    ///
+    /// `skip` 是给**第二轮（纯考卷）**用的：那一轮在同一对话里继续，页面上还躺着第一轮的
+    /// 完整脚本，直接全抓会连旧代码一起抓走 —— 而 `ScriptExtractor` 是「同分取更长」，
+    /// 大概率会挑中第一轮那份，跑出来的「纯考卷」其实是原版，肉眼还看不出来。
+    /// 所以先记下第一轮结束时的代码块数，第二轮只取这个序号之后的。
+    ///
+    /// ⚠️ skip 必须按「合格块」的序号算，不能按 DOM 下标 —— 思考区和折叠块会被跳过，
+    /// 两种序号会错位。`replyState` 里的 `blocks` 用的也是同一套过滤条件，两边口径一致。
+    static func grabBlocksBuild(skip: Int) -> String {
+        #"""
+        window.__wbCode=encodeURIComponent((function(){
+          var arr=[];
+          function push(t){
+            t=(t||'').replace(/\r\n/g,'\n');
+            // 剥掉 AI 打的结束标记行，别让它混进要执行的脚本里。
+            // 第一轮是 EXAM-END，第二轮（纯考卷）是 PLAIN-END，两个都要剥。
+            t=t.replace(/\n?[ \t]*#[ \t]*===(EXAM|PLAIN)-END===[ \t]*$/i,'');
+            t=t.replace(/\s+$/,'');
+            if(t.length>60 && arr.indexOf(t)<0) arr.push(t);
+          }
+          // 思考区里的草稿绝对不能抓（2026-10-29 14:29 抓错过一次，见 replyState 的注释）
+          function _wbIsThinking(el){
+            var n=el, hops=0;
+            while(n && n!==document.body && hops<12){
+              var cls='';
+              try{
+                cls=(n.getAttribute('class')||'')+' '+(n.getAttribute('data-testid')||'')
+                    +' '+(n.id||'');
+              }catch(e){}
+              if(/think|reason/i.test(cls)) return true;
+              try{
+                if(n.getAttribute('aria-expanded')!==null){
+                  var lbl=(n.getAttribute('aria-label')||'')+' '+(n.getAttribute('title')||'')
+                          +' '+(n.textContent||'').slice(0,24);
+                  if(/思考|think|reason/i.test(lbl)) return true;
+                }
+              }catch(e){}
+              n=n.parentElement; hops++;
             }
-          }catch(e){}
-          n=n.parentElement; hops++;
-        }
-        return false;
-      }
-      var nodes=document.querySelectorAll('.md-code-block pre');
-      if(!nodes.length) nodes=document.querySelectorAll('pre');
-      if(!nodes.length) nodes=document.querySelectorAll('pre code');
-      for(var i=0;i<nodes.length;i++){
-        var nd=nodes[i], h=0;
-        try{ h=nd.getBoundingClientRect().height; }catch(e){}
-        if(_wbIsThinking(nd) || h<1) continue;
-        push(nd.textContent);
-      }
-      return JSON.stringify(arr);
-    })());
-    window.__wbCode.length
-    """#
+            return false;
+          }
+          var nodes=document.querySelectorAll('.md-code-block pre');
+          if(!nodes.length) nodes=document.querySelectorAll('pre');
+          if(!nodes.length) nodes=document.querySelectorAll('pre code');
+          var ok=[];
+          for(var i=0;i<nodes.length;i++){
+            var nd=nodes[i], h=0;
+            try{ h=nd.getBoundingClientRect().height; }catch(e){}
+            if(_wbIsThinking(nd) || h<1) continue;
+            ok.push(nd);
+          }
+          for(var j=\#(skip);j<ok.length;j++){ push(ok[j].textContent); }
+          return JSON.stringify(arr);
+        })());
+        window.__wbCode.length
+        """#
+    }
 
     static func grabBlocksChunk(from: Int, to: Int) -> String {
         "window.__wbCode.substring(\(from),\(to))"

@@ -514,6 +514,7 @@ struct ContentView: View {
     @State private var exitPrimaryHover = false
     @State private var logoutPrimaryHover = false
     @State private var clearPrimaryHover = false
+    @State private var plainPrimaryHover = false
     @State private var loginHover = false
     @State private var loginBreathing = false
     @State private var recheckHover = false
@@ -639,6 +640,14 @@ struct ContentView: View {
         .overlay {
             if state.clearConfirmSlot != nil {
                 clearConfirmOverlay
+            }
+        }
+        .overlay(alignment: .top) {
+            // 「要不要顺便生成纯考卷」。压暗层只铺上半屏 —— 下半屏的 Word 卡保持可见，
+            // 用户一眼就知道含答案那份已经好了，纯考卷是额外加的。
+            if let offer = state.plainOffer {
+                plainOfferOverlay(offer)
+                    .transition(.opacity)
             }
         }
         .overlay(alignment: .top) {
@@ -882,6 +891,70 @@ struct ContentView: View {
             }
             .padding(20)
             .trialGlassCard(cornerRadius: 14, shadowOpacity: 0.18, shadowRadius: 14)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 「要不要顺便生成纯考卷」。答案 ≥ 5 处时出现（见 `AppState.countAnswerHeads`）。
+    ///
+    /// 两个约束：
+    /// 1. **只压暗上半屏**（548 = LogPanel 同一个值）。下半屏的 Word 卡保持可见，
+    ///    用户一眼知道含答案那份已经好了，纯考卷是额外加的，不是替代。
+    /// 2. 点压暗层 / Esc / 「不用了」三个都是放弃，行为一致 —— 不要出现「点外面关了但没记日志」。
+    private func plainOfferOverlay(_ offer: PlainOffer) -> some View {
+        ZStack(alignment: .top) {
+            Color.black.opacity(0.28)
+                .frame(height: 548)
+                .contentShape(Rectangle())
+                .onTapGesture { state.declinePlainPaper() }
+
+            VStack(spacing: 12) {
+                Text("这份试卷里有 \(offer.answerCount) 处答案")
+                    .font(.system(size: 13.5, weight: .semibold))
+
+                Text("要不要顺便生成一份不带答案、也不带解析的纯考卷？\n大约还要 1–3 分钟。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(spacing: 11) {
+                    Button {
+                        state.generatePlainPaper()
+                    } label: {
+                        Text("生成纯考卷")
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .padding(.horizontal, 17)
+                            .padding(.vertical, 5)
+                    }
+                    .dialogGlassProminentButtonStyle()
+                    .tint(Color.brandAccent)
+                    .foregroundStyle(.white)
+                    // 叠层不接点击，否则会挡住系统玻璃按钮（和清空确认框同一个坑）
+                    .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(Color.black.opacity(plainPrimaryHover ? 0.06 : 0))
+                        .allowsHitTesting(false))
+                    .onHover { plainPrimaryHover = $0 }
+                    .animation(.easeOut(duration: 0.15), value: plainPrimaryHover)
+                    .keyboardShortcut(.defaultAction)
+
+                    Button {
+                        state.declinePlainPaper()
+                    } label: {
+                        Text("不用了")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .padding(.horizontal, 17)
+                            .padding(.vertical, 5)
+                    }
+                    .dialogGlassButtonStyle()
+                    .keyboardShortcut(.cancelAction)
+                }
+                .padding(.top, 3)
+            }
+            .frame(width: 400)
+            .padding(20)
+            .trialGlassCard(cornerRadius: 14, shadowOpacity: 0.18, shadowRadius: 14)
+            .padding(.top, 186)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -2315,19 +2388,44 @@ struct WordCard: View {
     /// 只在玻璃上叠一层浅色提亮，不动玻璃、不放大、不提亮。
     @State private var cardHover = false
     @State private var downloadHover = false
+    @State private var plainHover = false
     @State private var logHover = false
 
-    private var active: Bool { state.docx.isReady }
+    /// 有纯考卷（生成中或已生成）时，卡片进入「两份」形态：标题变长、按钮拆成两个。
+    /// 纯考卷失败时不算 —— 用户 19:45 定「失败就失败」，卡片老老实实退回单份，
+    /// 不留一个永远点不动的按钮，失败原因只在「详情」里。
+    private var twoWay: Bool {
+        state.plainDocx.isReady || state.plainDocx.isBuilding
+    }
+
+    private var cardTitle: String {
+        twoWay ? "Word 转录 · 含答案与纯考卷" : "Word 转录"
+    }
+
+    private var active: Bool { state.docx.isReady || state.plainDocx.isReady }
 
     private var message: String {
+        if twoWay {
+            if state.plainDocx.isBuilding {
+                return state.docx.isReady
+                    ? "含答案的那份已经好了，纯考卷还在生成，大约还要 1–3 分钟。"
+                    : "纯考卷还在生成，大约还要 1–3 分钟。"
+            }
+            // 原版已经下载过了（下载完 docx 会回到 .idle），只剩纯考卷
+            if !state.docx.isReady {
+                return "纯考卷好了（\(sizeKB(state.plainDocx.url)) KB），点下面保存。含答案那份已经下载过了。"
+            }
+            let a = sizeKB(state.docx.url)
+            let b = sizeKB(state.plainDocx.url)
+            return "两份都好了：含答案 \(a) KB，纯考卷 \(b) KB。分别点下面的按钮保存。"
+        }
         switch state.docx {
         case .idle:
-            return "Word 试卷还没有开始生成，等上面的进度走完再回到这里。"
+            return "Word 文件还没有开始生成，等上面的进度走完再回到这里。"
         case .building:
             return "正在生成，稍等一下…"
         case .ready(let url):
-            let kb = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int ?? 0) / 1024
-            return "已经生成好了（\(kb) KB），点下面的按钮保存到电脑里。"
+            return "已经生成好了（\(sizeKB(url)) KB），点下面的按钮保存到电脑里。"
         case .failed(let why):
             // 失败只改这一行字，卡片其他部分一点不变（用户 2026-10-27：
             // 不要换按钮、不要弹面板、不要导 md/截图，日志一律看「详情」）。
@@ -2335,13 +2433,59 @@ struct WordCard: View {
         }
     }
 
+    private func sizeKB(_ url: URL?) -> Int {
+        guard let url = url else { return 0 }
+        return ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int ?? 0) / 1024
+    }
+
     private var buttonTitle: String {
         switch state.docx {
-        case .idle: return "下载 Word 试卷（尚未生成）"
+        case .idle: return "下载 Word 文件（尚未生成）"
         case .building: return "正在生成…"
-        case .ready: return "下载 Word 试卷"
-        case .failed: return "下载 Word 试卷（未生成）"
+        case .ready: return "下载 Word 文件"
+        case .failed: return "下载 Word 文件（未生成）"
         }
+    }
+
+    private var plainButtonTitle: String {
+        switch state.plainDocx {
+        case .ready: return "下载纯考卷"
+        case .building: return "正在生成纯考卷…"
+        default: return "下载纯考卷"
+        }
+    }
+
+    /// 下载按钮。两份形态下并排放两个，所以抽出来 —— 外观和原来那一个完全一样。
+    private func pillButton(title: String, enabled: Bool,
+                            hover: Binding<Bool>,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: enabled ? "arrow.down.circle.fill" : "arrow.down.circle")
+                    .font(.system(size: 12))
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+            .foregroundStyle(enabled ? Color.white : Color(nsColor: .secondaryLabelColor))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .trialGlassTinted(cornerRadius: 10,
+                              tint: enabled ? Color.brandAccent : Color.secondary,
+                              fallback: enabled
+                                ? AnyShapeStyle(LinearGradient(colors: [.brandAccent, .brandPurple],
+                                                               startPoint: .leading, endPoint: .trailing))
+                                : AnyShapeStyle(Color.secondary.opacity(0.14)),
+                              shadowColor: .clear, shadowRadius: 0, shadowY: 0)
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.white.opacity(hover.wrappedValue ? 0.06 : 0)))
+        }
+        .buttonStyle(.plain)
+        .handCursor()
+        .onHover { hover.wrappedValue = $0 }
+        .animation(.easeOut(duration: 0.15), value: hover.wrappedValue)
+        .disabled(!enabled)
     }
 
     var body: some View {
@@ -2350,7 +2494,7 @@ struct WordCard: View {
                 Image(systemName: "doc.richtext")
                     .font(.system(size: 15))
                     .foregroundStyle(active ? Color.brandAccent : Color.secondary)
-                Text("Word 试卷")
+                Text(cardTitle)
                     .font(.system(size: 14, weight: .semibold))
                 Spacer()
                 if active {
@@ -2389,36 +2533,25 @@ struct WordCard: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            HStack(spacing: 10) {
-                // 成功失败都是这一个按钮（用户 2026-10-27：失败时不要换按钮、
-                // 不要弹面板、不要导 md/截图）。没生成好就是禁用态，日志去「详情」看。
-                Button {
-                    state.downloadDocx()
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: active ? "arrow.down.circle.fill" : "arrow.down.circle")
-                            .font(.system(size: 12))
-                        Text(buttonTitle)
-                            .font(.system(size: 13, weight: .medium))
-                    }
-                    .foregroundStyle(active ? Color.white : Color(nsColor: .secondaryLabelColor))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .trialGlassTinted(cornerRadius: 10,
-                                      tint: active ? Color.brandAccent : Color.secondary,
-                                      fallback: active
-                                        ? AnyShapeStyle(LinearGradient(colors: [.brandAccent, .brandPurple],
-                                                                       startPoint: .leading, endPoint: .trailing))
-                                        : AnyShapeStyle(Color.secondary.opacity(0.14)),
-                                      shadowColor: .clear, shadowRadius: 0, shadowY: 0)
-                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.white.opacity(downloadHover ? 0.06 : 0)))
+            if twoWay {
+                // 两份形态：左「含答案」，右「纯考卷」。下载完的那份变灰但**不消失**，
+                // 用户一眼能看出哪份已经存过了（19:45 定：两份都要下完才解锁新任务）。
+                HStack(spacing: 10) {
+                    pillButton(title: state.docx.isReady ? "下载含答案试卷" : "含答案已下载",
+                               enabled: state.docx.isReady,
+                               hover: $downloadHover) { state.downloadDocx() }
+                    pillButton(title: plainButtonTitle,
+                               enabled: state.plainDocx.isReady,
+                               hover: $plainHover) { state.downloadPlainDocx() }
                 }
-                .buttonStyle(.plain)
-                .handCursor()
-                .onHover { downloadHover = $0 }
-                .animation(.easeOut(duration: 0.15), value: downloadHover)
-                .disabled(!active)
+            } else {
+                // 单份形态：成功失败都是这一个按钮（用户 2026-10-27：失败时不要换按钮、
+                // 不要弹面板、不要导 md/截图）。没生成好就是禁用态，日志去「详情」看。
+                HStack(spacing: 10) {
+                    pillButton(title: buttonTitle,
+                               enabled: state.docx.isReady,
+                               hover: $downloadHover) { state.downloadDocx() }
+                }
             }
         }
         .padding(16)
