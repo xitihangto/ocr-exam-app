@@ -441,6 +441,7 @@ extension AppState {
         var loggedMain = false
         var endMarkSeen = false
         var lastChangeAt = Date()
+        var lastThinkBlocks = -1
 
         func announce(_ key: String, _ title: String, _ detail: String = "") {
             guard key != lastStageKey else { return }
@@ -470,6 +471,16 @@ extension AppState {
             let hasEndMark = obj["hasEndMark"] as? Bool ?? false
             let looksComplete = obj["looksComplete"] as? Bool ?? false
             let afterLines = obj["afterLines"] as? Int ?? 0
+
+            // 思考区被跳过了几个代码块。为 0 说明这一轮没走深度思考（或者类名变了 ——
+            // 后者要警惕：类名一改，「跳过思考区」就失效，会退回 2026-10-29 那个抓错脚本的坑）。
+            let thinkBlocks = obj["thinkBlocks"] as? Int ?? 0
+            if thinkBlocks != lastThinkBlocks {
+                lastThinkBlocks = thinkBlocks
+                if thinkBlocks > 0 {
+                    log("思考区里也有 \(thinkBlocks) 个代码块，已忽略（只认回答区的）")
+                }
+            }
 
             if textLen != lastTextLen || codeLen != lastCodeLen {
                 lastChangeAt = Date()
@@ -770,6 +781,19 @@ extension AppState {
 
     /// 把页面上的代码块取回来，挑出最像「生成试卷」的那段
     func grabScript() throws -> String? {
+        // 0. 先看 AI 有没有自己说「看不到图片」。
+        // 它要是明说了，脚本里的内容必然是编的 —— 跑出来就是一份跟原卷无关的假试卷
+        // （2026-10-29 14:29 真实发生过：产出一份「复旦附中英语卷」，跟用户传的图毫无关系）。
+        // 宁可报错让用户重跑，也不要把假货当成品交出去。
+        let answer = (try? self.js(Scripts.answerText)) ?? ""
+        if let phrase = Self.blindHint(in: answer) {
+            log("⛔️ AI 明确说它没看到图片（出现「\(phrase)」），这次生成的内容不能执行")
+            throw BridgeError.failed(
+                "AI 说它没看到图片（原话里出现了「\(phrase)」）。这种情况下它写的内容是编的，"
+                + "执行出来会是一份跟原卷无关的假试卷，所以已经拦下来了。"
+                + "请重新识别一次；如果反复这样，说明图片没能真正传到 DeepSeek。")
+        }
+
         let lenRaw = try self.js(Scripts.grabBlocksBuild)
         guard let total = Int(lenRaw.trimmingCharacters(in: .whitespacesAndNewlines)),
               total > 0 else {
@@ -801,6 +825,15 @@ extension AppState {
     }
 
     // MARK: - 工具
+
+    /// AI 自曝「没看见图」的说法。只认明确指向图片的那几种，
+    /// 不误伤「第 3 页字迹看不清」这类正常的「特别注意」。
+    private static func blindHint(in text: String) -> String? {
+        let pattern = "(看不到|看不见|无法[^。\\n]{0,6}(看到|查看|读取|识别)"
+            + "|没有[^。\\n]{0,6}(看到|收到)|收不到)[^。\\n]{0,6}图片"
+        guard let hit = text.range(of: pattern, options: .regularExpression) else { return nil }
+        return String(text[hit])
+    }
 
     /// 用户点了「中止」就在下一个检查点退出
     private func checkStop() throws {

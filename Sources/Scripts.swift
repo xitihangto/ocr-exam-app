@@ -352,6 +352,44 @@ enum Scripts {
       }
       var pres=document.querySelectorAll('.md-code-block pre');
       if(!pres.length) pres=document.querySelectorAll('pre');
+      // ── 思考区排除（2026-10-29 14:29 血的教训）─────────────────────────
+      // 深度思考会把推理过程也渲染成 markdown，里面同样有 .md-code-block pre。
+      // 那轮实测：AI 在思考里先写了一整份草稿，连 # ===EXAM-END=== 都打上了，
+      // App 把草稿当成最终答案抓走执行 —— 产出一份跟原图毫无关系的假试卷。
+      // 所以「量代码长度 / 判结束标记 / 抓代码」一律只看回答区，思考区的 pre 全部跳过。
+      function _wbIsThinking(el){
+        var n=el, hops=0;
+        while(n && n!==document.body && hops<12){
+          var cls='';
+          try{
+            cls=(n.getAttribute('class')||'')+' '+(n.getAttribute('data-testid')||'')
+                +' '+(n.id||'');
+          }catch(e){}
+          // DeepSeek 的设计系统类名是语义化的（ds-markdown / ds-button__content 都这样），
+          // 思考面板跑不掉 think / reason；哈希类名是纯十六进制，不会误命中。
+          if(/think|reason/i.test(cls)) return true;
+          // 换类名时靠这条兜底：可折叠容器的标题写着「深度思考 / 思考中」
+          try{
+            if(n.getAttribute('aria-expanded')!==null){
+              var lbl=(n.getAttribute('aria-label')||'')+' '+(n.getAttribute('title')||'')
+                      +' '+(n.textContent||'').slice(0,24);
+              if(/思考|think|reason/i.test(lbl)) return true;
+            }
+          }catch(e){}
+          n=n.parentElement; hops++;
+        }
+        return false;
+      }
+      var _all=[], thinkBlocks=0;
+      for(var q=0;q<pres.length;q++){
+        var _p=pres[q], _h=0;
+        try{ _h=_p.getBoundingClientRect().height; }catch(e){}
+        // 折叠起来的思考区高度是 0，顺带跳过（同样是换类名时的兜底）
+        if(_wbIsThinking(_p) || _h<1){ thinkBlocks++; continue; }
+        _all.push(_p);
+      }
+      pres=_all;
+      out.thinkBlocks=thinkBlocks;
       var total=0;
       for(var j=0;j<pres.length;j++){ total+=(pres[j].textContent||'').length; }
       out.pres=pres.length;
@@ -522,15 +560,42 @@ enum Scripts {
       var arr=[];
       function push(t){
         t=(t||'').replace(/\r\n/g,'\n');
-        // 剥掉 AI 打的结束标记行，别让它混进要执行的脚本里
-        t=t.replace(/\n?[ \t]*#[ \t]*===ESSAY-END===[ \t]*$/i,'');
+        // 剥掉 AI 打的结束标记行，别让它混进要执行的脚本里。
+        // 注意是 EXAM-END：这一行从作文版克隆过来时漏改过，别改回 ESSAY-END。
+        t=t.replace(/\n?[ \t]*#[ \t]*===EXAM-END===[ \t]*$/i,'');
         t=t.replace(/\s+$/,'');
         if(t.length>60 && arr.indexOf(t)<0) arr.push(t);
+      }
+      // 思考区里的草稿绝对不能抓（2026-10-29 14:29 抓错过一次，见 replyState 的注释）
+      function _wbIsThinking(el){
+        var n=el, hops=0;
+        while(n && n!==document.body && hops<12){
+          var cls='';
+          try{
+            cls=(n.getAttribute('class')||'')+' '+(n.getAttribute('data-testid')||'')
+                +' '+(n.id||'');
+          }catch(e){}
+          if(/think|reason/i.test(cls)) return true;
+          try{
+            if(n.getAttribute('aria-expanded')!==null){
+              var lbl=(n.getAttribute('aria-label')||'')+' '+(n.getAttribute('title')||'')
+                      +' '+(n.textContent||'').slice(0,24);
+              if(/思考|think|reason/i.test(lbl)) return true;
+            }
+          }catch(e){}
+          n=n.parentElement; hops++;
+        }
+        return false;
       }
       var nodes=document.querySelectorAll('.md-code-block pre');
       if(!nodes.length) nodes=document.querySelectorAll('pre');
       if(!nodes.length) nodes=document.querySelectorAll('pre code');
-      for(var i=0;i<nodes.length;i++) push(nodes[i].textContent);
+      for(var i=0;i<nodes.length;i++){
+        var nd=nodes[i], h=0;
+        try{ h=nd.getBoundingClientRect().height; }catch(e){}
+        if(_wbIsThinking(nd) || h<1) continue;
+        push(nd.textContent);
+      }
       return JSON.stringify(arr);
     })());
     window.__wbCode.length
@@ -539,6 +604,47 @@ enum Scripts {
     static func grabBlocksChunk(from: Int, to: Int) -> String {
         "window.__wbCode.substring(\(from),\(to))"
     }
+
+    /// 取最后几条回答的正文（**不含思考区**），只用来做一件事：
+    /// 判断 AI 是不是压根没看见图片。它要是自己说「看不到图片」，脚本里的内容必然是编的，
+    /// 跑出来的 Word 会是一份跟原卷毫无关系的假试卷（2026-10-29 14:29 真实发生过一次）。
+    static let answerText = #"""
+    (function(){
+      function _wbIsThinking(el){
+        var n=el, hops=0;
+        while(n && n!==document.body && hops<12){
+          var cls='';
+          try{
+            cls=(n.getAttribute('class')||'')+' '+(n.getAttribute('data-testid')||'')
+                +' '+(n.id||'');
+          }catch(e){}
+          if(/think|reason/i.test(cls)) return true;
+          try{
+            if(n.getAttribute('aria-expanded')!==null){
+              var lbl=(n.getAttribute('aria-label')||'')+' '+(n.getAttribute('title')||'')
+                      +' '+(n.textContent||'').slice(0,24);
+              if(/思考|think|reason/i.test(lbl)) return true;
+            }
+          }catch(e){}
+          n=n.parentElement; hops++;
+        }
+        return false;
+      }
+      var ms=document.querySelectorAll('.ds-markdown'), keep=[];
+      for(var i=0;i<ms.length;i++){
+        var h=0;
+        try{ h=ms[i].getBoundingClientRect().height; }catch(e){}
+        if(_wbIsThinking(ms[i]) || h<1) continue;
+        keep.push(ms[i]);
+      }
+      if(!keep.length) return '';
+      var out='';
+      for(var j=Math.max(0,keep.length-5);j<keep.length;j++){
+        out+=(keep[j].textContent||'')+'\n';
+      }
+      return out.slice(-6000);
+    })()
+    """#
 
     /// 只定位「继续」按钮，返回它在视口里的中心坐标（给真实鼠标点击用）
     static let locateContinue = #"""
