@@ -1534,7 +1534,7 @@ struct UploadCard: View {
         // 有文件时 / 已经在等粘贴时 / 正在跑的时候都不显示。
         .overlay(alignment: .center) {
             if items.isEmpty && !armed && !state.isRunning {
-                Text("点击此处可粘贴")
+                Text("点击此处可粘贴，或将文件拖入")
                     // 用户 2026-10-29 第 3 轮第 1 条：16 → 19，再淡一点。
                     .font(.system(size: 19))
                     .foregroundStyle(.secondary.opacity(0.6))
