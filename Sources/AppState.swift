@@ -1871,6 +1871,49 @@ final class AppState: ObservableObject {
     /// 点「下载纯考卷」
     func downloadPlainDocx() { saveDocx(plain: true) }
 
+    /// 日志面板里看到的那一份文字：日志行 + 空行 + 「—— 脚本输出 ——」+ 脚本输出。
+    ///
+    /// **复制和下载共用这一个**。以前只有「复制全部」在 `LogPanel` 里自己拼，
+    /// 加了「下载日志」之后如果各拼一遍，以后改一处漏一处，两边内容就会漂。
+    var logText: String {
+        var parts = progressLines
+        if !scriptOutput.isEmpty {
+            if !parts.isEmpty { parts.append("") }
+            parts.append("—— 脚本输出 ——")
+            parts.append(scriptOutput)
+        }
+        return parts.joined(separator: "\n")
+    }
+
+    /// 点「下载日志」：和「下载 Word 文件」同一套流程（弹面板 → 落在下载目录 →
+    /// 写完在 Finder 里定位），只是写的不是复制来的文件，而是上面那份文字。
+    ///
+    /// 返回是否真的存了（面板被取消返回 false），按钮据此决定要不要闪「已保存」。
+    @discardableResult
+    func saveLog() -> Bool {
+        let text = logText
+        guard !text.isEmpty else { return false }
+        let panel = NSSavePanel()
+        panel.title = "保存运行日志"
+        panel.message = "选择日志存到哪里"
+        panel.nameFieldStringValue = "运行日志-\(Self.stampNow()).txt"
+        if let t = UTType(filenameExtension: "txt") { panel.allowedContentTypes = [t] }
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+
+        guard panel.runModal() == .OK, let dest = panel.url else { return false }
+        do {
+            try text.write(to: dest, atomically: true, encoding: .utf8)
+            say("日志已保存 ✓", detail: dest.path, running: false, tone: .ok)
+            revealInFinder(dest)
+            return true
+        } catch {
+            say("日志保存失败", detail: error.localizedDescription, running: false, tone: .error)
+            return false
+        }
+    }
+
     /// 两份产物共用一套保存逻辑。`plain` 只决定「读哪个状态、写哪个状态、叫什么名」。
     ///
     /// 保存面板固定落在系统「下载」目录，不跟题目文件所在目录走 ——
