@@ -93,15 +93,16 @@ cd ocr-exam-app
 
 ## 版本
 
-当前版本：**v1.0**（首个正式版：继续按钮判定逻辑已稳定，深度思考与智能搜索默认开启，运行日志不再落盘）。
+当前版本：**v1.4**（v1.0 首个正式版之后：v1.1 提示词改版与人称统一；v1.2 纯考卷第二轮 + 日志面板重做；
+v1.3 圈号/全角标点字体修复；v1.4 无人值守替跑）。
 
 仓库：<https://github.com/xitihangto/ocr-exam-app>
 
 推 `v*` 标签会由 GitHub Actions 自动构建并发布 Release，成品可直接下载，不用自己编译：
 
 ```bash
-curl -L --fail -o ~/Downloads/ExamOCR-v1.0.zip \
-  https://github.com/xitihangto/ocr-exam-app/releases/download/v1.0/ExamOCR-v1.0.zip
+curl -L --fail -o ~/Downloads/ExamOCR-v1.4.zip \
+  https://github.com/xitihangto/ocr-exam-app/releases/download/v1.4/ExamOCR-v1.4.zip
 ```
 
 用 `curl` 下载不会被打上隔离属性，也就不会弹 Gatekeeper；装新版前记得先彻底退出旧 App。
