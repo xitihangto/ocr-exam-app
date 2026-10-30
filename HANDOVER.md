@@ -111,6 +111,62 @@ BIN="dist/试卷识别.app/Contents/MacOS/ExamOCR"
 "$BIN" --keytest                                   # ⌘J 开新对话（会真发一句"你好"）
 ```
 
+### 无人值守替跑（autopilot，2026-10-30 加）
+
+用户说「**替跑**」就是指这个：不选文件、不点按钮，让 App 自己跑完一轮，用于回归测试。
+源码 `Sources/Autopilot.swift`，入口在 `ContentView.onAppear` 里调 `Autopilot.start(state:)`。
+
+```bash
+# 首选：直接跑包内二进制。参数一定传得到，退出码同步返回
+"dist/试卷识别.app/Contents/MacOS/ExamOCR" \
+    --autopilot /绝对路径/第1页.png /绝对路径/第2页.png --out /绝对路径/输出目录
+
+# 整份 PDF（槽里只放 1 个）
+".../ExamOCR" --autopilot /绝对路径/试卷.pdf --out /tmp/run1
+
+# 几十张图也可以写成一个逗号串，两种写法等价
+".../ExamOCR" --autopilot "1.png,2.png,3.png" --out /tmp/run1
+```
+
+兜底方案（**唯一能「双击图标就替跑」的路子**）：
+
+```bash
+B=com.workbuddy.examocr
+defaults write $B autopilotPaper -string "/绝对路径/第1页.png,/绝对路径/第2页.png"
+defaults write $B autopilotOut   -string "/绝对路径/输出目录"
+killall ExamOCR 2>/dev/null; open -a "试卷识别"
+
+# 跑完必须清掉，否则下次打开 App 还会自动再跑一轮
+defaults delete $B autopilotPaper; defaults delete $B autopilotOut
+```
+
+**行为**：查文件在不在 → 等 3 秒 → 填试卷槽（`acceptBatch`，轮询到真的进框为止，最多 120 秒，
+几十张图要建缩略图，慢）→ **等「深度思考 + 联网搜索」双绿灯**（`modesChecked`，最多 60 秒）
+→ 跑 pipeline → 复制成品和日志到输出目录 → 退出。
+
+**退出码**：`0` 成功 / `1` 生成失败 / `2` 超时（**30 分钟**，整份卷页数多确实慢）/
+`3` 文件放不进上传框或文件不存在 / `4` 双绿灯未确认。
+
+**输出目录**里会有三样：成品 docx、`autopilot-日志.txt`（完整运行日志）、
+`_trace.txt`（关键节点时间戳 —— 命令行侧看不到 NSLog，靠它判断卡在哪一步）。
+
+**替跑只取「含答案的那份」Word。** 成品出来之后界面会问「要不要顺便生成纯考卷」，
+那份要用户确认才生成，替跑不点它，所以 `plainDocx` 恒为 idle。要纯考卷得手动跑。
+
+**三个坑**：
+
+1. **`open -a … --args` 传不进去**（跟本文件 §2「界面状态演示」里那条是同一个毛病）。
+   2026-10-30 加这个功能时实测：`open --args` 起来连 `_trace.txt` 都不生成，换成直接跑二进制立刻就对了。
+   **自动化脚本一律直接跑二进制。**
+2. `open -a` 会复用正在运行的实例，**改完代码必须 `killall ExamOCR` 再启动**，否则跑的还是旧二进制。
+3. **上传框不查文件存在性**（只按扩展名收卡片），所以文件路径写错时卡片照样进框，
+   要等 pipeline 跑到一半才报「未能打开文件」，退出码还是 1（看起来像生成失败）。
+   替跑在 `start()` 开头自己查一遍 `fileExists`，路径写错直接退出码 3 并写明是哪个文件 ——
+   这道检查只在替跑里，**不影响正常使用**。
+
+⚠️ 双绿灯必须等。界面按钮不强制（`canGenerate` 不含 `modesChecked`，怕开关认不出来时按钮永久变灰），
+但替跑没人看着，模式没确认就开跑，识别出来的试卷质量会不一致。
+
 ### 界面状态演示（只改状态，不碰网络）
 
 `--uidemo`（生成中）/ `--uidemo2`（已出成品）/ `--uidemo3`（失败）/
@@ -150,6 +206,7 @@ ocr-exam-app/
 │   ├── BrowserController.swift # WKWebView + 隐形窗口 + 真实鼠标/键盘注入
 │   ├── PythonRunner.swift      # 内置 Python 执行器（prelude 猴补丁记录产物）
 │   ├── ScriptExtractor.swift   # 从回复里挑出 Python 代码块
+│   ├── Autopilot.swift         # 无人值守替跑，用法见 §2
 │   └── SafariBridge.swift      # AppleScript 通道（备用，默认不用）
 ├── Resources/
 │   ├── 试卷识别规则.md          # 情况 A：印刷体试卷（附件 1）

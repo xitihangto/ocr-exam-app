@@ -659,6 +659,9 @@ struct ContentView: View {
             } else if CommandLine.arguments.contains("--modeprobe") {
                 state.runModeProbe()
             }
+            // 无人值守跑一轮（回归测试用），参数见 Autopilot 的注释。
+            // 放在 demo 分支之后：带 --uidemo 时不会同时触发替跑。
+            Autopilot.start(state: state)
         }
         .onReceive(NotificationCenter.default.publisher(for: .examAppConfirmExit)) { _ in
             showExitConfirm = true
