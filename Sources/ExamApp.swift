@@ -612,6 +612,8 @@ struct ContentView: View {
                     window.delegate = ExitConfirmWindowDelegate.shared
                 }
             }
+            // 测试模式：一启动就把日志摊开，不用等开跑（正常模式只在开跑时展开）
+            if AppState.autoOpenLogWhileTesting { state.openLog() }
             // 开发用：--preview /path/to/file 启动即打开该文件的预览（验文档渲染最省事）
             if let idx = CommandLine.arguments.firstIndex(of: "--preview"),
                idx + 1 < CommandLine.arguments.count,
@@ -644,7 +646,13 @@ struct ContentView: View {
                 state.applyUIDemo(step: 8)
             } else if CommandLine.arguments.contains("--uidemo9") {
                 state.applyUIDemo(step: 9)
-            } else if CommandLine.arguments.contains("--logdemo") {
+            } else if CommandLine.arguments.contains("--logdemo")
+                        || UserDefaults.standard.bool(forKey: "demoLog") {
+                // `open -a … --args --logdemo` 实测不一定能传进 `CommandLine.arguments`
+                // （LaunchServices 启动的 app 拿不拿得到要看它心情），所以再给一个
+                // UserDefaults 开关兜底：
+                //   defaults write com.workbuddy.examocr demoLog -bool YES
+                //   defaults delete com.workbuddy.examocr demoLog
                 state.applyLogDemo()
             } else if CommandLine.arguments.contains("--logintest") {
                 state.runLoginSelfTest()
