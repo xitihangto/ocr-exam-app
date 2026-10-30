@@ -601,13 +601,26 @@ SwiftUI 侧的 `GeometryReader` / `.frame(in:)` 在本工程**读不到**滚动�
 | hover 叠层挡点击 | 按钮点不动 | 叠层加 `allowsHitTesting(false)` |
 | 稳定 10 秒就当写完 | 抓到截断脚本，Python 报 SyntaxError | 必须有收尾标志，否则等到 10 分钟上限 |
 | 启动瞬间判「未登录」 | 明明登录了却闪登录按钮 | 探针加 `bodyLen` + `hasLoginButton` |
-| Finder 里没图标 | 只有 Dock 有 | `SetFile -a B` 标 bundle |
+| Finder 里没图标 | 只有 Dock 有 | ~~`SetFile -a B` 标 bundle~~ **这条 2026-10-30 推翻**：`.app` 后缀本身就映射到 `com.apple.application-bundle`，Finder 靠它认包、读 `CFBundleIconFile` 出图标，bundle bit 根本不需要。实测 `GetFileInfo -aB` 为 0 时 `mdls kMDItemKind` 仍是「应用程序」。而且 `SetFile -a B` 会写 FinderInfo，**反过来害得 codesign 跳过签名**（见下面那行），所以 build.sh 里已经彻底删掉它 |
 | 显示名改 Info.plist 不生效 | 名字还是旧的 | 读的是 `zh-Hans.lproj/InfoPlist.strings` |
 | 截图量尺寸截到全黑 | 亮度 0、找不到边框 | App 里那个**隐形 WKWebView 窗口**也是 layer 0 且 >400×400，会先被 `CGWindowListCopyWindowInfo` 匹配到；取「宽度最接近主窗口 620pt」的那个，不是第一个 |
 | **`codesign` 静默跳过，bundle id 悄悄变了**（本工程 2026-10-29 修） | 构建日志只有一句「(签名跳过)」，看着正常；`codesign -dv` 显示 `flags=0x20002(adhoc,linker-signed)`、`Info.plist=not bound`、`Identifier=ExamOCR` 而不是 `com.workbuddy.examocr` | 增量构建时 `SetFile -a B` 写进去的 FinderInfo 让 codesign 报 `resource fork, Finder information, or similar detritus not allowed`，被 `2>/dev/null` 吞掉就只剩「跳过」。**后果极隐蔽**：`UserDefaults` 和 WKWebView 的 cookie 都按 Identifier 分域 → 偏好读不到、DeepSeek 登录态丢失。修法：签名前 `xattr -cr "$APP"`，**且不要 `2>/dev/null`**。查体：`codesign -dv` 的 `Identifier` 必须等于 `Info.plist` 的 `CFBundleIdentifier`。⚠️ **讲义 / 作文两个 app 克隆时都漏抄了这条**（2026-10-29 才补），说明「照上一份复制」不可靠，新克隆一个 app 后必须逐条核对 build.sh |
 
 **本工程新增的一条**：`AppState` 里删 `syncLegacyURL` 时，容易连带删掉紧邻的
 `pasteFromClipboard`（整块替换的边界没算准）—— 编译报 "has no dynamic member"，先查这个函数还在不在。
+
+### `codesign --verify --strict` 报 detritus（2026-10-30 修）
+
+症状：`codesign --verify` 通过，但 `--strict` 报
+`resource fork, Finder information, or similar detritus not allowed`。
+
+根因是 build.sh 签名之后那句 `SetFile -a B`，它往 bundle 根目录写了 `com.apple.FinderInfo`。
+**实测把 SetFile 挪到签名之前也不行** —— 只要属性还在，`codesign` 照样报错并跳过签名。
+唯一正确的解法是**根本不设 bundle bit**（`.app` 后缀够用，理由见上面坑表里那条），
+签名前 `xattr -cr` 清一遍，签完不要再动扩展属性。
+
+验证：`codesign --verify --strict "dist/试卷识别.app"` 应当无输出直接返回；
+`xattr "/Applications/试卷识别.app"` 里**只该有 `com.apple.provenance`**，不该有 `com.apple.FinderInfo`。
 
 ### 界面尺寸 / 几何的两个工具
 

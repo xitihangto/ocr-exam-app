@@ -85,19 +85,23 @@ if [ ! -f "$APP/Contents/Resources/AppIcon.icns" ]; then
 fi
 
 echo "▸ 临时签名"
-# 增量构建时包是上一版留下的：SetFile -a B 会往 bundle 上写 FinderInfo 扩展属性，
-# codesign 见到会报「resource fork, Finder information, or similar detritus not allowed」
-# 直接跳过签名。先清掉扩展属性再签。
+# 这里**故意不设 bundle bit**（以前签名后会跑一句 `SetFile -a B`）。
 #
-# 而签名一旦被跳过，bundle 只剩 linker-signed，`codesign -dv` 里的 Identifier 会变成
-# 可执行文件名（ExamOCR），不再是 Info.plist 里的 com.workbuddy.examocr ——
-# UserDefaults 和 WKWebView 的 cookie 都是按 Identifier 分域的，后果是偏好读不到、
+# 原因：`SetFile -a B` 会往 bundle 根目录写 com.apple.FinderInfo 扩展属性，
+# 而 codesign 见到 FinderInfo 就报「resource fork, Finder information, or similar
+# detritus not allowed」并**跳过签名** —— 2026-10-30 实测，把它挪到签名之前也一样报，
+# 因为只要属性在，签的时候就过不去。而签名一旦被跳过，bundle 只剩 linker-signed，
+# `codesign -dv` 的 Identifier 会退化成可执行名（ExamOCR），
+# UserDefaults 和 WKWebView cookie 都按 Identifier 分域，后果是偏好读不到、
 # DeepSeek 登录态丢失。所以失败**必须看得见**，不要 2>/dev/null。
+#
+# 那 bundle bit 到底要不要？**不要**。.app 这个后缀本身就映射到
+# com.apple.application-bundle，Finder 靠它认包、读 CFBundleIconFile 出图标。
+# 2026-10-30 实测：去掉 FinderInfo 后 `GetFileInfo -aB` 为 0，
+# 但 `mdls kMDItemContentType` 仍是 com.apple.application-bundle、kind 仍是「应用程序」。
+# 顺带好处：`codesign --verify --strict` 从「报 detritus」变成干净通过。
 xattr -cr "$APP" 2>/dev/null || true
 codesign --force --sign - --timestamp=none "$APP" || echo "  ⚠️ 签名失败（Identifier 会退化成可执行名，UserDefaults 域跟着变）"
-
-# 必须标记为 Bundle，否则 Finder 不显示图标
-SetFile -a B "$APP" 2>/dev/null || echo "  (SetFile 跳过)"
 
 echo "✓ 完成：$APP"
 du -sh "$APP"
@@ -114,9 +118,6 @@ if [ "${1:-}" = "--install" ] || [ "${2:-}" = "--install" ]; then
   fi
   cp -R "$APP" /Applications/
   ( rm -rf "$OLD" 2>/dev/null || true ) &
-  # cp -R 后安装副本的 Finder bundle 标记可能丢失（Finder 图标变通用图标，
-  # 但 Dock 仍能从 Info.plist 读到图标），所以在安装副本上再标一次并 touch
-  SetFile -a B "/Applications/试卷识别.app" 2>/dev/null || echo "  (安装副本 SetFile 跳过)"
   touch "/Applications/试卷识别.app"
   echo "✓ 已安装：/Applications/试卷识别.app"
   open "/Applications/试卷识别.app"
