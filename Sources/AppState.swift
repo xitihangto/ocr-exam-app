@@ -1550,7 +1550,9 @@ final class AppState: ObservableObject {
     ///
     /// **2026-10-29 正式版 v1.0 起改回 `false`** —— 恢复成「只有点详情才出现」。
     /// 测试期设 `true` 是为了不用每次手动展开（用户要求「测试阶段把日志放在显眼处」）。
-    static let autoOpenLogWhileTesting = false
+    /// **2026-10-30 又临时打开**：这几天在测日志面板的新按钮（下载日志 / 跨行选择），
+    /// 用户要求「可以直接看详情」。测完记得改回 `false`。
+    static let autoOpenLogWhileTesting = true
 
     func openLog() {
         guard !showLog else { return }
