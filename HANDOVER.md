@@ -1099,6 +1099,19 @@ README 的版本行和 curl 下载链接同步到 v1.0。
 
 ## 9. 待办
 
+### ⏳ 待推送（2026-10-30 起攒的，推完即删）
+
+- **推之前先核对提交者身份**（2026-10-30 本仓库踩过的坑）。本仓库**原本连 `user.name` / `user.email`
+  都没配**（全局也没配），2026-10-30 第一次 commit 的作者被自动猜成 `linquin@linquins-Mac-mini.local`。
+  已补上 `xitihangto <xitihangto@gmail.com>` 并用 `git commit --amend --reset-author` 修正了那个**尚未推送**的提交。
+  **教训：这类错误一旦推上去就改不回来了**，所以推送前跑一遍 `git log -1 --format='%an <%ae>'` 核对；
+  顺手把全局也配上，免得下次新建仓库重演：
+  ```bash
+  git config --global user.name  "xitihangto"
+  git config --global user.email "xitihangto@gmail.com"
+  ```
+- 待推内容：`231c2d2` 无人值守替跑（autopilot）。**版本号仍是 1.3，推之前按发版五步升到位。**
+
 ### ✅ 已发版 v1.2（2026-10-29 21:36，用户说「examapp 推送 gh ci」）
 
 v1.1 之后攒下的东西全部随 v1.2 出包，下面两条待办随之关闭：
