@@ -1097,12 +1097,19 @@ v1.1 之后攒下的东西全部随 v1.2 出包，下面两条待办随之关闭
 
 ## 10. 版本与发布（用户 2026-10-29 定）
 
-- **以 git 方式开发，但只在本地**。仓库已经 `git init`（分支 `main`），**没有 remote**。
+- **以 git 方式开发**。仓库 `git init`（分支 `main`），远程为 `github.com/xitihangto/ocr-exam-app`（v1.0 起已在 GitHub 上）。
 - **初步成熟可用之前，一律不推 GitHub**，也不建远程仓库、不打 tag、不跑 CI。
-- 只有用户**明确说「推」/「推到 gh」** 时才执行：`gh repo create` → `git remote add origin` → 推 `main` → 打 `v*` tag。
+- 只有用户**明确说「推」/「推到 gh」** 时才执行：推 `main` → 打 `v*` tag → 推 tag 触发 CI。
   **不要自作主张推、不要顺手推、不要在"顺便清理一下"的时候推。**
 - 版本号：日常改动沿用当前版本号，用户说要发布时才升 `CFBundleShortVersionString` 并打 tag
   （CI 会校验包内版本与 tag 一致，不一致直接失败）。
+- **发版会自动同步到 R2**（2026-10-30 加）：`release.yml` 末尾有 `Mirror to R2` 一步，
+  在 `Publish Release` 之后把 zip 再传一份到 Cloudflare R2（bucket `app-releases`），
+  由 `gh-proxy.kexuejia.qzz.io` 从 CF 内部直出，不再跨境回源 GitHub。
+  凭据是仓库 Secrets 的 `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`（R2 API Token，
+  只限 `app-releases`）；这一步失败会让 job 红掉，看到红叉就是该版本没进 R2，
+  手动补传见 `~/gh-proxy-r2/README.md`。**R2 key 不含 `releases/download` 那段**，
+  只有 `owner/repo/tag/asset` 四段——写错不报错，只会静默回源变慢。
 - `.gitignore` 里排除：`dist/`、`*.app`、`.workbuddy-ai/`（agent 工作笔记，不推）。
   `Runtime/python/`（75MB）**是入库的** —— CI 靠它打包，跟前两代一致。
 
