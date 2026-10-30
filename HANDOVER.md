@@ -651,8 +651,9 @@ defaults delete com.workbuddy.examocr demoLog           # 关掉
 `Pipeline.swift` 里，也就是点了开始之后才展开。想启动即展开，得在 `ContentView.onAppear`
 里再加一句 `if AppState.autoOpenLogWhileTesting { state.openLog() }`。
 
-> 三份 App（讲义 / 作文 / 试卷）都已补上这两处。**讲义和作文保持 `false`**；
-> 试卷这份用户 2026-10-30 要求临时开着测日志面板，**测完要改回 `false`**。
+> 三份 App（讲义 / 作文 / 试卷）都已补上这两处。**三份的 `autoOpenLogWhileTesting` 现在都是 `false`**。
+> 试卷这份 2026-10-30 白天临时开过一次（测「下载日志」和跨行选择），当天 14:04 已改回 `false`，
+> `defaults delete com.workbuddy.examocr demoLog` 也执行过了。以后要测：临时改这一行 + 重启即可。
 
 ---
 
