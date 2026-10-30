@@ -732,6 +732,7 @@ defaults delete com.workbuddy.examocr demoLog           # 关掉
 | 显示名改 Info.plist 不生效 | 名字还是旧的 | 读的是 `zh-Hans.lproj/InfoPlist.strings` |
 | 截图量尺寸截到全黑 | 亮度 0、找不到边框 | App 里那个**隐形 WKWebView 窗口**也是 layer 0 且 >400×400，会先被 `CGWindowListCopyWindowInfo` 匹配到；取「宽度最接近主窗口 620pt」的那个，不是第一个 |
 | **`codesign` 静默跳过，bundle id 悄悄变了**（本工程 2026-10-29 修） | 构建日志只有一句「(签名跳过)」，看着正常；`codesign -dv` 显示 `flags=0x20002(adhoc,linker-signed)`、`Info.plist=not bound`、`Identifier=ExamOCR` 而不是 `com.workbuddy.examocr` | 增量构建时 `SetFile -a B` 写进去的 FinderInfo 让 codesign 报 `resource fork, Finder information, or similar detritus not allowed`，被 `2>/dev/null` 吞掉就只剩「跳过」。**后果极隐蔽**：`UserDefaults` 和 WKWebView 的 cookie 都按 Identifier 分域 → 偏好读不到、DeepSeek 登录态丢失。修法：签名前 `xattr -cr "$APP"`，**且不要 `2>/dev/null`**。查体：`codesign -dv` 的 `Identifier` 必须等于 `Info.plist` 的 `CFBundleIdentifier`。⚠️ **讲义 / 作文两个 app 克隆时都漏抄了这条**（2026-10-29 才补），说明「照上一份复制」不可靠，新克隆一个 app 后必须逐条核对 build.sh |
+| **git 提交者身份没配，作者被猜成机器名**（本工程 2026-10-30 踩） | commit 作者变成 `linquin@linquins-Mac-mini.local`，不是 `xitihangto <xitihangto@gmail.com>` | 这台机器**全局没配** `user.name` / `user.email`，只靠各仓库单独配，本仓库克隆时漏了。修法：先 `git config user.name/user.email`，再 `git commit --amend --reset-author`（**只对尚未推送的提交**）。**一旦推上去就改不回来了**。新建仓库第一件事就是配这两项 |
 
 **本工程新增的一条**：`AppState` 里删 `syncLegacyURL` 时，容易连带删掉紧邻的
 `pasteFromClipboard`（整块替换的边界没算准）—— 编译报 "has no dynamic member"，先查这个函数还在不在。
@@ -1099,15 +1100,10 @@ README 的版本行和 curl 下载链接同步到 v1.0。
 
 ## 9. 待办
 
-### ⏳ 待推送（2026-10-30 起攒的，推完即删）
+### ✅ 已发版 v1.4（2026-10-30 19:57，无人值守替跑）
 
-- 待推内容：`231c2d2` 无人值守替跑（autopilot）；`95ba333` 本文件补待推送一节。
-  **版本号仍是 1.3，推之前按发版五步升到位。**
-- **本仓库 2026-10-30 踩过一次提交者身份**：原本连 `user.name` / `user.email` 都没配（这台机器全局也没配），
-  首次 commit 的作者被自动猜成 `linquin@linquins-Mac-mini.local`。**已修好**：补上
-  `xitihangto <xitihangto@gmail.com>`，并用 `git commit --amend --reset-author` 修正了那个**尚未推送**的提交。
-  只留一句教训：**这种错一旦推上去就改不回来了**，推前 `git log -1 --format='%an <%ae>'` 扫一眼成本极低。
-  另外这台机器的**全局身份仍未配**，以后新建仓库还会重演 —— 待办见总则「发版纪律」第 0 步。
+按用户要求走的「临时发版」：**跳过本地重编/安装**（本机 `/Applications` 里的 App 还是 1.3），
+只升版本号 + 打 tag + 推 CI。
 
 ### ✅ 已发版 v1.2（2026-10-29 21:36，用户说「examapp 推送 gh ci」）
 
