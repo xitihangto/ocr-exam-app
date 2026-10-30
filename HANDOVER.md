@@ -634,6 +634,26 @@ SwiftUI 侧的 `GeometryReader` / `.frame(in:)` 在本工程**读不到**滚动�
 按钮在「复制全部」左边，同样的白底胶囊；成功存盘后 1.6 秒内显示「已保存」。
 两个按钮共用 `isEmpty`（日志和脚本输出都空）置灰。
 
+### 附：测试开关的两个坑（2026-10-30）
+
+想「一打开就能看到详情」，连撞两次墙，两次都是代码本身的问题：
+
+**① `--logdemo` 不一定能传进来。** `open -a "…" --args --logdemo` 看着天经地义，但**实测参数
+没到 `CommandLine.arguments`** —— LaunchServices 启动的 app 拿不拿得到要看它心情。
+所以加了个不依赖启动参数的兜底：`UserDefaults.bool(forKey: "demoLog")`。
+
+```bash
+defaults write com.workbuddy.examocr demoLog -bool YES   # 打开
+defaults delete com.workbuddy.examocr demoLog           # 关掉
+```
+
+**② `autoOpenLogWhileTesting` 只管「开跑时」，管不到「启动时」。** 它唯一的用点在
+`Pipeline.swift` 里，也就是点了开始之后才展开。想启动即展开，得在 `ContentView.onAppear`
+里再加一句 `if AppState.autoOpenLogWhileTesting { state.openLog() }`。
+
+> 三份 App（讲义 / 作文 / 试卷）都已补上这两处。**讲义和作文保持 `false`**；
+> 试卷这份用户 2026-10-30 要求临时开着测日志面板，**测完要改回 `false`**。
+
 ---
 
 ## 8. 踩过的坑（继承自前两代，别重犯）
