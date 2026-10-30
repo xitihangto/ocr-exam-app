@@ -1103,6 +1103,11 @@ v1.1 之后攒下的东西全部随 v1.2 出包，下面两条待办随之关闭
   **不要自作主张推、不要顺手推、不要在"顺便清理一下"的时候推。**
 - 版本号：日常改动沿用当前版本号，用户说要发布时才升 `CFBundleShortVersionString` 并打 tag
   （CI 会校验包内版本与 tag 一致，不一致直接失败）。
+- **升版必须连本地一起升到位**（2026-10-30 用户定）：改完 `build.sh` 的版本号后，
+  先 `./build.sh --install` 重编替换、quit 并重开 App，**再**打 tag 推。
+  顺序反了就会出现「线上 1.3、本机还是 1.2」。另外 `--install` 里那句 `pkill` 在沙箱内会被
+  静默拦掉（`2>/dev/null || true` 吃了报错），装完必须确认旧进程真的退出了，否则
+  「磁盘上是新版、内存里跑的是旧版」，最难发现。
 - **发版会自动同步到 R2**（2026-10-30 加）：`release.yml` 末尾有 `Mirror to R2` 一步，
   在 `Publish Release` 之后把 zip 再传一份到 Cloudflare R2（bucket `app-releases`），
   由 `gh-proxy.kexuejia.qzz.io` 从 CF 内部直出，不再跨境回源 GitHub。
